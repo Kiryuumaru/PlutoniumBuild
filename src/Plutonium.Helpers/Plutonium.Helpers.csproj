@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <RootNamespace>Plutonium.Helpers</RootNamespace>
+    <AssemblyName>Plutonium.Helpers</AssemblyName>
+    <Description>Helpers-facing entries, AppId versioning UX, and workflow config. Depends on Plutonium.Core only.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Plutonium.Core\Plutonium.Core.csproj" />
+  </ItemGroup>
+
+</Project>

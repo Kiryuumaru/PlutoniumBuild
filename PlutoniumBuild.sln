@@ -1,0 +1,36 @@
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plutonium.Core", "src\Plutonium.Core\Plutonium.Core.csproj", "{B1E2C3D4-E5F6-4789-ABCD-EF0123456789}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plutonium.Helpers", "src\Plutonium.Helpers\Plutonium.Helpers.csproj", "{C2F3D4E5-F6A7-4890-BCDE-F0123456789A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plutonium.Core.Tests", "tests\Plutonium.Core.Tests\Plutonium.Core.Tests.csproj", "{6D17C2CD-9749-4E22-986E-350A2D30325A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Plutonium.Helpers.Tests", "tests\Plutonium.Helpers.Tests\Plutonium.Helpers.Tests.csproj", "{6D4CB965-A6A4-4788-873C-4865F2B39420}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{B1E2C3D4-E5F6-4789-ABCD-EF0123456789}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B1E2C3D4-E5F6-4789-ABCD-EF0123456789}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B1E2C3D4-E5F6-4789-ABCD-EF0123456789}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B1E2C3D4-E5F6-4789-ABCD-EF0123456789}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C2F3D4E5-F6A7-4890-BCDE-F0123456789A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C2F3D4E5-F6A7-4890-BCDE-F0123456789A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C2F3D4E5-F6A7-4890-BCDE-F0123456789A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C2F3D4E5-F6A7-4890-BCDE-F0123456789A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6D17C2CD-9749-4E22-986E-350A2D30325A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6D17C2CD-9749-4E22-986E-350A2D30325A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6D17C2CD-9749-4E22-986E-350A2D30325A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6D17C2CD-9749-4E22-986E-350A2D30325A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6D4CB965-A6A4-4788-873C-4865F2B39420}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6D4CB965-A6A4-4788-873C-4865F2B39420}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6D4CB965-A6A4-4788-873C-4865F2B39420}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6D4CB965-A6A4-4788-873C-4865F2B39420}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

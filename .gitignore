@@ -1,0 +1,16 @@
+# PlutoniumBuild ignores — confirmed set: private repo for Kiryuumaru, branch main
+# .inspirations/ excluded forever (read-only audit refs, never commit)
+.inspirations/
+
+# Build output excluded
+bin/
+obj/
+
+# Confirmed doc exclusions
+HANDOVER.md
+docs/nuke_build/
+docs/nuke_build_helpers/
+
+# Standard .NET / VS noise (idiomatic)
+.vs/
+TestResults/
