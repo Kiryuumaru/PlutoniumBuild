@@ -27,6 +27,7 @@ and state it.
 ├── docs/
 │   ├── index.md            # docs entry point
 │   ├── packages.md         # Phase-1 package status
+│   ├── agents/             # workflow config (issue-tracker, triage-labels, domain)
 │   └── concepts/
 │       └── scope.md        # AUTHORITATIVE in/out scope for 0.1.0
 └── .inspirations/
@@ -91,9 +92,25 @@ Banned in code and docs unless explicitly requested:
 
 ## 8. Skills index
 
+- Agent workflow config lives in `docs/agents/` (`issue-tracker.md`,
+  `triage-labels.md`, `domain.md`); see `## Agent skills` below.
 - No skills index file exists yet in this repo. When one is added (e.g.
   `SKILLS.md` or `docs/skills.md`), point to it here and follow it.
 - Until then, this AGENTS.md is the sole agent ruleset plus §9 overrides.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub issues via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary (`needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout (`CONTEXT.md` + `docs/adr/` created lazily). See `docs/agents/domain.md`.
 
 ## 9. Safe-agent overrides (win on conflict)
 

@@ -78,6 +78,7 @@ payload / `BUILD_ID` / `HAS_RELEASE`).
 └── docs/
     ├── index.md            # docs entry point
     ├── packages.md         # Phase-1 package status
+    ├── agents/             # agent workflow config (issue-tracker, triage-labels, domain)
     └── concepts/
         └── scope.md        # authoritative in/out scope for 0.1.0
 ```

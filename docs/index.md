@@ -8,6 +8,12 @@
 - [Recreate intent](../src/CONCEPT.md) — 1 page.
 - `samples/` — **planned**, no samples yet.
 
+## Agent workflow config
+
+- [Issue tracker](agents/issue-tracker.md) — GitHub issues via `gh`.
+- [Triage labels](agents/triage-labels.md) — default five-role vocabulary.
+- [Domain docs](agents/domain.md) — single-context consumer rules.
+
 ## Audit maps (inspiration references, read-only sources)
 
 - [NukeBuildHelpers audit map](nuke_build_helpers/index.md) — entries DSL, contexts, versioning, workflows, runner, cache/artifacts, secrets, CLI, console, deps + overlap/drop-keep/gaps.
