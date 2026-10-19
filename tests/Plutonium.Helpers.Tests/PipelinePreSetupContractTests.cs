@@ -1,5 +1,24 @@
-using Plutonium.Core;
 using Xunit;
+using Plutonium.Core;
+using Plutonium.Core.Runner;
+using Plutonium.Core.Logging;
+using Plutonium.Core.FileSystem;
+using Plutonium.Core.Process;
+using Plutonium.Core.Process.Tools;
+using Plutonium.Core.Hosting;
+using Plutonium.Core.Workflows;
+using Plutonium.Core.Workflows.Emitters;
+using Plutonium.Helpers.Entries;
+using Plutonium.Helpers.Entries.Definitions;
+using Plutonium.Helpers.Entries.Discovery;
+using Plutonium.Helpers.Entries.Extensions;
+using Plutonium.Helpers.Runtime;
+using Plutonium.Helpers.Pipelines;
+using Plutonium.Helpers.Pipelines.Context;
+using Plutonium.Helpers.Pipelines.Models;
+using Plutonium.Helpers.Pipelines.RunnerOS;
+using Plutonium.Helpers.Versioning;
+using Plutonium.Helpers.App;
 
 namespace Plutonium.Helpers.Tests;
 
@@ -8,6 +27,7 @@ namespace Plutonium.Helpers.Tests;
 /// with a payload reference, union needs on PRE_SETUP, always-exported BUILD_ID, and a false
 /// CONDITION for entries without a setup. Probed via public workflow and finalize entry points.
 /// </summary>
+[Collection("PipelineEnvironment")]
 public sealed class PipelinePreSetupContractTests
 {
     /// <summary>
@@ -15,12 +35,12 @@ public sealed class PipelinePreSetupContractTests
     /// HAS_RELEASE references without static runs-on, run-script, cache, or checkout keys.
     /// </summary>
     [Fact]
-    public async Task GithubPreSetupOutputs_HaveConditionBuildIdHasReleaseAndPayloadRef()
+    public async Task GitHubPreSetupOutputs_HaveConditionBuildIdHasReleaseAndPayloadRef()
     {
         var entries = CreateEntries();
-        var context = CreateContext(PlutoniumPipelineType.Github, entries);
+        var context = CreateContext(PlutoniumPipelineType.GitHub, entries);
 
-        var result = await new PlutoniumGithubPipeline().BuildWorkflowAsync(context);
+        var result = await new PlutoniumGitHubPipeline().BuildWorkflowAsync(context);
 
         var outputs = result.Document.Jobs[0].Outputs;
         Assert.Equal("PRE_SETUP", result.Document.Jobs[0].Id);
@@ -74,11 +94,11 @@ public sealed class PipelinePreSetupContractTests
     /// Verifies every GitHub entry and post-setup job needs PRE_SETUP first.
     /// </summary>
     [Fact]
-    public async Task GithubEntryJobs_RequirePreSetup()
+    public async Task GitHubEntryJobs_RequirePreSetup()
     {
-        var context = CreateContext(PlutoniumPipelineType.Github, CreateEntries());
+        var context = CreateContext(PlutoniumPipelineType.GitHub, CreateEntries());
 
-        var result = await new PlutoniumGithubPipeline().BuildWorkflowAsync(context);
+        var result = await new PlutoniumGitHubPipeline().BuildWorkflowAsync(context);
 
         foreach (var job in result.Document.Jobs.Where(job => !job.Id.Equals("PRE_SETUP", StringComparison.Ordinal)))
         {
@@ -111,7 +131,7 @@ public sealed class PipelinePreSetupContractTests
     [InlineData(true)]
     public async Task Finalize_ExportsBuildIdValue(bool azure)
     {
-        var context = CreateContext(azure ? PlutoniumPipelineType.Azure : PlutoniumPipelineType.Github, CreateEntries());
+        var context = CreateContext(azure ? PlutoniumPipelineType.Azure : PlutoniumPipelineType.GitHub, CreateEntries());
         var preSetup = new PlutoniumPipelinePreSetup
         {
             Branch = "main",
@@ -140,7 +160,10 @@ public sealed class PipelinePreSetupContractTests
     }
 
     /// <summary>
-    /// Verifies a null BUILD_ID is always exported as an empty string.
+    /// Verifies a null BUILD_ID is always exported as an empty value through the CI channel
+    /// downstream jobs consume: the GitHub Actions output file or the Azure Pipelines
+    /// <c>##vso[task.setvariable]</c> line. The process environment keeps the empty value
+    /// only on .NET 9 and later.
     /// </summary>
     /// <param name="azure">True for the Azure pipeline; otherwise the GitHub pipeline.</param>
     [Theory]
@@ -148,7 +171,7 @@ public sealed class PipelinePreSetupContractTests
     [InlineData(true)]
     public async Task Finalize_ExportsEmptyBuildIdWhenNull(bool azure)
     {
-        var context = CreateContext(azure ? PlutoniumPipelineType.Azure : PlutoniumPipelineType.Github, CreateEntries());
+        var context = CreateContext(azure ? PlutoniumPipelineType.Azure : PlutoniumPipelineType.GitHub, CreateEntries());
         var preSetup = new PlutoniumPipelinePreSetup
         {
             Branch = "main",
@@ -159,17 +182,64 @@ public sealed class PipelinePreSetupContractTests
             BuildEntries = ["my-job"],
         };
         var buildIdName = PlutoniumPipelineContract.OutputName("PRE_SETUP", "BUILD_ID");
+        var githubActions = Environment.GetEnvironmentVariable("GITHUB_ACTIONS");
+        var githubOutput = Environment.GetEnvironmentVariable("GITHUB_OUTPUT");
+        var tfBuild = Environment.GetEnvironmentVariable("TF_BUILD");
+        var outputFile = Path.Combine(
+            Path.GetTempPath(), "plutonium-pipeline-output-" + Guid.NewGuid().ToString("N"));
+        var originalOut = Console.Out;
+        var stdout = new StringWriter();
 
         try
         {
+            Environment.SetEnvironmentVariable("GITHUB_ACTIONS", azure ? null : "true");
+            Environment.SetEnvironmentVariable("TF_BUILD", azure ? "True" : null);
+            Environment.SetEnvironmentVariable("GITHUB_OUTPUT", outputFile);
+            if (azure)
+            {
+                Console.SetOut(stdout);
+            }
+
             await Pipeline(azure).FinalizePreSetupAsync(context, preSetup);
 
-            Assert.Equal(string.Empty, Environment.GetEnvironmentVariable(buildIdName));
+            if (azure)
+            {
+                var lines = stdout.ToString().Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+                Assert.Contains($"##vso[task.setvariable variable={buildIdName};isOutput=true]", lines);
+            }
+            else
+            {
+                Assert.True(File.Exists(outputFile), "GitHub Actions output file was not written.");
+                Assert.Contains($"{buildIdName}=", File.ReadAllLines(outputFile));
+            }
+
+            // Verified semantics (Microsoft Learn breaking change, .NET 9 "Support for empty
+            // environment variables"; true .NET 8.0.32 on Linux observed a deleted variable):
+            // before .NET 9, SetEnvironmentVariable(name, string.Empty) deletes the variable on
+            // all supported platforms; from .NET 9 it keeps an empty value, while null still
+            // deletes. The channel assertion above stays runtime-independent.
+            var exportedValue = Environment.GetEnvironmentVariable(buildIdName);
+            if (Environment.Version.Major >= 9)
+            {
+                Assert.Equal(string.Empty, exportedValue);
+            }
+            else
+            {
+                Assert.Null(exportedValue);
+            }
         }
         finally
         {
+            Console.SetOut(originalOut);
+            Environment.SetEnvironmentVariable("GITHUB_ACTIONS", githubActions);
+            Environment.SetEnvironmentVariable("GITHUB_OUTPUT", githubOutput);
+            Environment.SetEnvironmentVariable("TF_BUILD", tfBuild);
             Environment.SetEnvironmentVariable(buildIdName, null);
             ClearSharedExports();
+            if (File.Exists(outputFile))
+            {
+                File.Delete(outputFile);
+            }
         }
     }
 
@@ -183,7 +253,7 @@ public sealed class PipelinePreSetupContractTests
     [InlineData(true)]
     public async Task Finalize_ExportsFalseConditionWhenSetupMissing(bool azure)
     {
-        var context = CreateContext(azure ? PlutoniumPipelineType.Azure : PlutoniumPipelineType.Github, CreateEntries());
+        var context = CreateContext(azure ? PlutoniumPipelineType.Azure : PlutoniumPipelineType.GitHub, CreateEntries());
         var preSetup = new PlutoniumPipelinePreSetup
         {
             Branch = "main",
@@ -215,7 +285,7 @@ public sealed class PipelinePreSetupContractTests
     }
 
     private static IPlutoniumPipeline Pipeline(bool azure) =>
-        azure ? new PlutoniumAzurePipeline() : new PlutoniumGithubPipeline();
+        azure ? new PlutoniumAzurePipeline() : new PlutoniumGitHubPipeline();
 
     private static PlutoniumAllEntries CreateEntries()
     {

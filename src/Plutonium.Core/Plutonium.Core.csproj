@@ -4,7 +4,7 @@
     <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
     <RootNamespace>Plutonium.Core</RootNamespace>
     <AssemblyName>Plutonium.Core</AssemblyName>
-    <Description>Standalone build target runner with CLI parsing and logging.</Description>
+    <Description>Standalone build target runner and logging engine.</Description>
   </PropertyGroup>
 
 </Project>
