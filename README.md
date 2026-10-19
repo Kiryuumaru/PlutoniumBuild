@@ -1,104 +1,91 @@
 # PlutoniumBuild
 
-In-house Helpers-style build-automation UX **without** a `Nuke.Common` dependency.
+Define your build steps in C#, run them from your terminal or in CI, and generate your GitHub Actions and Azure Pipelines workflow files from the same definitions — with per-app versioning handled for you.
 
-> Status: **Phase-1 landed.** `src/Plutonium.Core/` and
-> `src/Plutonium.Helpers/` exist with Phase-1 code (see below).
-> `tests/` and `samples/` remain **planned** and do not exist yet.
-> Pins: `global.json` SDK `10.0.100` (`rollForward latestMajor`),
-> `src/Directory.Build.props` version `0.1.0`.
+> Status: **Phase-B landed.** The engine, author layer, and CLI exist with landed code; `tests/` landed, `samples/` still **planned**. Pins: SDK `10.0.401`, version `0.1.0`, targets `net8.0` / `net9.0` / `net10.0`.
 
-## Purpose
+## Why use it
 
-Audited **recreation** (not copy-paste) of the `NukeBuild` + `NukeBuildHelpers`
-user experience as `PlutoniumBuild`, facing build authors who today write
-`BaseNukeBuildHelpers`-style builds:
+- Describe what to test, build, and publish once, then run the same entries on your machine and in CI's per-entry jobs.
+- Your CI workflow files are generated from those definitions, so they cannot drift out of sync.
+- Each app gets its own version line, with commands to inspect and release new versions.
 
-- Target entries (`BuildEntry` / `TestEntry` / `PublishEntry`-style)
-- `AppId`-keyed multi-app builds
-- Versioning (`version` / `bump` / status-watching UX)
-- GitHub Actions / Azure Pipelines workflow generation
+## Getting started
 
-PlutoniumBuild will provide that UX on its own runner, with **no
-`Nuke.Common` dependency**. Phase-1 code has landed and is source of truth;
-docs follow it.
+Reference `Plutonium.Helpers` and `Plutonium.Shell` from your build project (`Plutonium.Core` comes along as the engine), then describe your build as a plain class with one property per step:
 
-## Inspirations (read-only, do not copy)
+```csharp
+using Plutonium.Helpers.Entries.Definitions;
+using Plutonium.Helpers.Entries.Extensions;
 
-- `./.inspirations/NukeBuildHelpers` — `main @ 5c17b96`
-  (Helpers UX: entries, `AppId`, versioning, workflow generation)
-- `./.inspirations/NukeBuild` — `develop @ 27e8077`
-  (runner / target / CI-adapter concepts)
+public sealed class MyBuild
+{
+    // Required: names your pipeline. The defaults are fine to start with.
+    public WorkflowConfigEntry WorkflowConfig => definition => definition;
 
-Treat both as audit references only. No code is to be lifted verbatim;
-recreate behavior behind a clean PlutoniumBuild API.
+    public TestEntry UnitTests => definition => definition
+        .AppId("myapp")
+        .Execute(() => { /* run your tests */ });
 
-## Packages (Phase-1 status)
-
-| Package | Intent |
-| ------- | ------ |
-| `Plutonium.Core` (`src/Plutonium.Core`, landed) | Target runner, plan-then-execute, CLI parsing, logging + secret masking, process result, path. Workflow emitters landed: `PlutoniumGitHubEmitter.cs` / `PlutoniumAzureEmitter.cs` (`Render` / `WriteWorkflow`, `PlutoniumHost.ExportJobOutput` output wiring) |
-| `Plutonium.Helpers` (`src/Plutonium.Helpers`, landed) | Full entries (`TestEntry` / `BuildEntry` / `PublishEntry` / `WorkflowConfigEntry` definitions, discovery, extensions, runner), `AppId`, run-context shapes. Versioning UX landed (`PlutoniumBuildVerbs` `Version` / `Bump` / `BumpAndForget` / `StatusWatch`). Pipelines landed (`PlutoniumGithubPipeline` / `PlutoniumAzurePipeline` / `PlutoniumLocalPipeline`): CONDITION-only live outputs plus payload / `BUILD_ID` / `HAS_RELEASE` via `ExportJobOutput`; legacy full-matrix `BuildEntryExports` is `[Obsolete]` |
-| Future transports / pipelines | Reserved; see `docs/packages.md` — not started |
-
-Landed detail: Core — `Cli.cs` (`--skip` / `--list` / `--help`, unknown-arg
-suggestions), `PlutoniumTargetDefinition.cs` + `Builder` (dependency DSL),
-`PlutoniumRunner.cs` (topological plan, skip replanning, timing, cycle
-detection), `Logging.cs` + `IPlutoniumLogSink.cs` + `PlutoniumLogLevel.cs`,
-`PlutoniumPath.cs`, `PlutoniumProcessResult.cs` (TFMs `net8.0;net9.0;net10.0`),
-`PlutoniumGitHubEmitter.cs` / `PlutoniumAzureEmitter.cs` (workflow emitters;
-`Render` / `WriteWorkflow`).
-Helpers — `PlutoniumAppId.cs`, `RunContext.cs` (`IRunContext` /
-`AppRunContext`), `PlutoniumEntryDelegates.cs`,
-`PlutoniumEntryDefinitions.cs` / `PlutoniumEntryDefinitionTypes.cs` /
-`PlutoniumEntryDiscovery.cs` / `PlutoniumEntryExtensions.cs` /
-`PlutoniumEntryRunner.cs` (full entries), `PlutoniumBuildVerbs.cs`
-(`Version` / `Bump` / `BumpAndForget` / `StatusWatch` versioning UX),
-`PlutoniumGithubPipeline.cs` / `PlutoniumAzurePipeline.cs` /
-`PlutoniumLocalPipeline.cs` (pipelines; CONDITION-only live outputs plus
-payload / `BUILD_ID` / `HAS_RELEASE`).
-`Plutonium.Helpers` depends only on `Plutonium.Core`. Authoritative split:
-`docs/concepts/scope.md`.
-
-## Layout
-
-```text
-/
-├── AGENTS.md               # agent working agreements (this workspace's rules)
-├── README.md               # this file
-├── PlutoniumBuild.sln      # solution (Phase-1 landed)
-├── global.json             # SDK pin: 10.0.100, rollForward latestMajor (pin only)
-├── src/
-│   ├── CONCEPT.md          # 1-page recreate intent
-│   ├── Directory.Build.props # version 0.1.0 / LangVersion / TFM settings
-│   ├── Plutonium.Core/     # LANDED Phase-1 — runner, CLI, logging, path, process
-│   └── Plutonium.Helpers/  # LANDED Phase-1 — entry stubs, AppId, run contexts
-├── tests/                  # PLANNED — no code yet
-├── samples/                # PLANNED — no code yet
-└── docs/
-    ├── index.md            # docs entry point
-    ├── packages.md         # Phase-1 package status
-    ├── agents/             # agent workflow config (issue-tracker, triage-labels, domain)
-    └── concepts/
-        └── scope.md        # authoritative in/out scope for 0.1.0
+    public BuildEntry Compile => definition => definition
+        .AppId("myapp")
+        .Execute(() => { /* build your app */ });
+}
 ```
 
-## Entry points
+Each step picks an app with `AppId` (lowercase letters, digits, dots, and dashes, starting with a letter or digit) and lists what it does with `Execute`. A `PublishEntry` step works the same way for publishing. Step ids come from the property name by default; every final id — including one set through `WorkflowId` or `Id` — must use ASCII letters, digits, `_`, or `-`, starting with a letter or `_`. An invalid id fails workflow generation with an error naming the id. Discovery finds these properties automatically; every step needs an `AppId`, and the `WorkflowConfig` property is required.
 
-- Start at `docs/index.md`.
-- Authoritative scope: `docs/concepts/scope.md` (authoritative for 0.1.0).
-- Recreate intent: `src/CONCEPT.md`.
-- Agent rules: `AGENTS.md`.
+Put this entry point in your app's `Program.cs`, replacing the placeholders with your repo's values:
 
-## Build
+```csharp
+using ApplicationBuilderHelpers;
+using Plutonium.Core.FileSystem;
+using Plutonium.Helpers.Pipelines.Context;
+using Plutonium.Shell;
 
-- `dotnet build PlutoniumBuild.sln` — build landed Phase-1 projects
-  (`src/Plutonium.Core`, `src/Plutonium.Helpers`).
-- SDK note: `global.json` pins SDK `10.0.100` with
-  `rollForward latestMajor`.
+var root = "/path/to/your/repo"; // replace with your repository root
+var options = new PlutoniumBuildOptions(
+    ["main"], // your environment branches
+    "main", // your main branch
+    new PlutoniumPath(root), // repository root
+    new PlutoniumPath(root + "/tmp"), // scratch directory — adjust
+    new PlutoniumPath(root + "/out"), // shared output directory — adjust
+    new PlutoniumPath(root + "/cache"), // shared cache directory — adjust
+    "https://github.com/your-org/your-repo"); // replace with your repository URL
 
-## Contributing
+var builder = ApplicationBuilder.Create();
+builder.AddPlutoniumShell(new MyBuild(), options);
+return await builder.RunAsync(args); // args is your command line
+```
 
-Docs follow code: Phase-1 code is source of truth.
-Keep docs internally consistent: every referenced path must exist or be
-explicitly marked **planned**.
+This wires your build class to the command line; the logging defaults to the console. Then run your app:
+
+```text
+mybuild                                # interactive picker (the default)
+mybuild shell Test                     # run your tests locally
+mybuild shell Bump --args myapp=minor+1  # release a new version
+mybuild shell github-workflow          # regenerate the CI file
+```
+
+Add `--list` to any command to preview its steps instead of running them.
+
+## Running it
+
+With no arguments your app opens an interactive picker over everything it can do. Otherwise use `shell` plus a verb — see the [CLI reference](docs/cli.md) for all 16 verbs, aliases, options, and exit codes.
+
+## What it generates
+
+- The GitHub Actions file under `.github/workflows` and `azure-pipelines.yml` at the repository root. Regenerate them after changing your steps.
+- Versions live in git tags like `myapp/1.2.3`; a release bump tags `myapp/1.3.0-bump`. Bump one with `--args myapp=minor+1` (`major` / `minor` / `patch` / `prerelease` / `pre`; `+` steps up, `>` sets).
+
+## Status and links
+
+- Run `./build.sh` (or `./build.cmd` on Windows) — on a machine without the SDK it installs the pinned SDK into `.plutonium/temp` (repo-local, disposable, gitignored) first, then builds and runs the tests. With `dotnet` already installed, `dotnet build PlutoniumBuild.sln` and `dotnet test` work as before.
+- [Docs](docs/index.md) — guides, CLI reference, versioning, workflows.
+- [CLI reference](docs/cli.md) — every command, alias, option, and exit code.
+- [Versioning](docs/versioning.md) — check versions and release new ones.
+- [Workflows](docs/workflows.md) — generate the CI files from your steps.
+- [Authoritative scope for 0.1.0](docs/concepts/scope.md) — developer doc: what is and is not included.
+- [Packages](docs/dev/packages.md) — developer doc: what each library covers.
+- [Architecture](docs/dev/architecture.md) — developer doc: how the three libraries fit together.
+- The command line is powered by `ApplicationBuilderHelpers`.

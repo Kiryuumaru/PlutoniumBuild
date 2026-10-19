@@ -1,20 +1,47 @@
 # Docs — PlutoniumBuild
 
-> Status: **Phase-1 landed** (`src/Plutonium.Core/`,
-> `src/Plutonium.Helpers`). `tests/` and `samples/` remain **planned**.
+Start with the [README](../README.md), then use these guides.
 
-- [Scope (authoritative for 0.1.0)](concepts/scope.md) — in/out of recreate.
-- [Packages (Phase-1 status)](packages.md) — Core vs Helpers vs future.
+## Getting started
+
+The [README](../README.md) shows what PlutoniumBuild is, why to use it, and how to describe your build and wire it to the command line.
+
+## Running your build
+
+Copy the runner templates — [`build.sh`](../templates/build.sh), `build.ps1`, `build.cmd` — into your repository root so your build runs on a machine without the SDK; edit one line to point them at your build project. See [Runner scripts](workflows.md#runner-scripts).
+
+## CLI reference
+
+[CLI reference](cli.md) — every command, its aliases, the shared options, and exit codes.
+
+## Versioning and releases
+
+[Versioning](versioning.md) — name your apps, check versions, and release new ones.
+
+## Generating CI workflows
+
+[Workflows](workflows.md) — generate the GitHub Actions and Azure Pipelines files from your steps.
+
+## Developer documentation
+
+For maintainers, not end users. Design, scope, and package internals:
+
+- [Scope (authoritative for 0.1.0)](concepts/scope.md) — what is and is not included.
+- [Packages](dev/packages.md) — what each library covers.
+- [Architecture](dev/architecture.md) — how the three libraries fit together.
 - [Recreate intent](../src/CONCEPT.md) — 1 page.
-- `samples/` — **planned**, no samples yet.
 
-## Agent workflow config
+`samples/` stays planned — no samples yet.
+
+## Project tooling
+
+Agent workflow config lives here and is not part of the user path:
 
 - [Issue tracker](agents/issue-tracker.md) — GitHub issues via `gh`.
 - [Triage labels](agents/triage-labels.md) — default five-role vocabulary.
 - [Domain docs](agents/domain.md) — single-context consumer rules.
 
-## Audit maps (inspiration references, read-only sources)
+The audit maps below are local, untracked audit material — read-only references used during the recreate. They are not shipped with the repo and will 404 on a fresh clone until the owner decides commit-vs-drop.
 
-- [NukeBuildHelpers audit map](nuke_build_helpers/index.md) — entries DSL, contexts, versioning, workflows, runner, cache/artifacts, secrets, CLI, console, deps + overlap/drop-keep/gaps.
-- [NUKE core audit map](nuke_build/index.md) — targets, CLI/params, execution, logging/host, CI adapters, tooling, components, global tool, partitioning, solution/sourcegen, utilities.
+- `nuke_build_helpers/` (17 pages) — entries DSL, contexts, versioning, workflows, runner, cache/artifacts, secrets, CLI, console, deps + overlap/drop-keep/gaps.
+- `nuke_build/` (12 pages) — targets, CLI/params, execution, logging/host, CI adapters, tooling, components, global tool, partitioning, solution/sourcegen, utilities.

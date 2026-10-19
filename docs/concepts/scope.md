@@ -1,5 +1,7 @@
 # Scope — PlutoniumBuild 0.1.0 (AUTHORITATIVE)
 
+> Developer documentation — for maintainers, not end users.
+>
 > Status: **authoritative for `0.1.0`**. Freezes Core vs Helpers boundaries for the 0.1.0 build.
 >
 > - Decision (confirmed): scope is **everything `NukeBuildHelpers` is, plus polyfill of its
@@ -8,11 +10,16 @@
 > - Sources (read-only): `.inspirations/NukeBuildHelpers` @ `main 5c17b96`,
 >   `.inspirations/NukeBuild` @ `develop 27e8077`; audit maps in
 >   `docs/nuke_build_helpers/` (17 pages) and `docs/nuke_build/` (12 pages).
-> - Status: **Phase-1 landed** (`src/Plutonium.Core/`,
->   `src/Plutonium.Helpers/` exist with Phase-1 code; `tests/`,
->   `samples/` remain **planned**). Code is source of truth;
+  (Note: these audit maps are local, untracked audit material — read-only
+  references used during the recreate, not shipped with the repo.)
+> - Status: **Phase-B landed** (`src/Plutonium.Core/`,
+>   `src/Plutonium.Helpers/`, `src/Plutonium.Shell/` exist with landed code;
+>   `tests/` landed, `samples/` remains **planned**). Code is source of truth;
 >   fix this doc if code evolves, never silently change code to match docs.
-> - Pins: `global.json` SDK `10.0.100`, `src/Directory.Build.props` version `0.1.0`.
+> - Pins: `global.json` SDK `10.0.401`, `src/Directory.Build.props` version `0.1.0`.
+> - Dependency direction: Shell → Helpers → Core. Core stays BCL-only,
+>   Helpers stays library-only; the `ApplicationBuilderHelpers` (`4.1.160`)
+>   reference lives only in `Plutonium.Shell`.
 
 ## In scope — `Plutonium.Core` (polyfill of Helpers' Nuke deps)
 
@@ -29,8 +36,9 @@ Standalone runner replacing what Helpers reuses from Nuke directly
 - Plan-then-execute split: topological order, `--skip` replanning, static/dynamic
   conditions, failure/skip semantics, per-target timing and summary
   (see `docs/nuke_build/execution-graph-planner-executor.md`).
-- CLI / parameter injection: generic `[Parameter]`-equivalent, required/secret markers,
-  `--skip` / `--list` verbs, `--args`-style AppId filtering at Helpers level;
+- CLI / app shell: owned by `Plutonium.Shell` on `ApplicationBuilderHelpers`
+  (`4.1.160`) — 16 verbs plus kebab/legacy aliases, shared `--skip` /
+  `--args` / `--list` / `--all`, exit mapping `0` / `2` / `1` / `130`;
   unknown-arg failure with suggestions (see `docs/nuke_build/cli-parameters.md`,
   `docs/nuke_build_helpers/cli-commands.md`).
 - Logging / host: level switch, per-target context enricher, console + file sinks,
@@ -75,8 +83,10 @@ Every Helpers-facing feature (see `docs/nuke_build_helpers/index.md`):
   (see `docs/nuke_build_helpers/statuswatch-version-ux.md`).
 - GitHub workflows: `PRE_SETUP` job + per-entry output matrix
   (`CONDITION` / `RUNS_ON` / `RUN_SCRIPT` / `CACHE_*` / `CHECKOUT_*`),
-  `NUKE_PRE_SETUP` (base64 JSON) contract, trigger set (env branches, `bump-*` tags,
-  all PRs), pre/post step injection (see `docs/nuke_build_helpers/workflows-github.md`).
+  `PLUTONIUM_PRE_SETUP` (base64 JSON) contract, trigger set (env branches, `bump-*` tags,
+  all PRs), pre/post step injection; each entry job runs `shell pipeline-entry-run`
+  and selects its entry with `PLUTONIUM_ENTRY`
+  (see `docs/nuke_build_helpers/workflows-github.md`).
   - Clarification (Option C narrowing, not a scope break): `PRE_SETUP` output matrix
     stays in scope but membership narrows to genuinely dynamic values (`CONDITION` +
     `BUILD_ID` / `HAS_RELEASE` via new primitive); static `RUNS_ON` / `RUN_SCRIPT` /
@@ -87,7 +97,8 @@ Every Helpers-facing feature (see `docs/nuke_build_helpers/index.md`):
     via `ExportJobOutput`), and `FinalizePreSetupAsync` wires them
     via `ExportJobOutput`.
 - Azure workflows: same semantics in Azure trigger/stage syntax; only the step-dictionary
-  shape differs (`run`/`name`/`id` vs `script`/`name`/`displayName`)
+  shape differs (`run`/`name`/`id` vs `script`/`name`/`displayName`), and entry jobs
+  also run `shell pipeline-entry-run` with `PLUTONIUM_ENTRY`
   (see `docs/nuke_build_helpers/workflows-azure.md`).
 - Local workflows: `Run` / `Test` / `Build` / `Publish` direct in-process parity,
   `RunType`-filtered, artifact pack/unpack still active
@@ -104,10 +115,17 @@ Every Helpers-facing feature (see `docs/nuke_build_helpers/index.md`):
   export/mask at pre/post-setup (see `docs/nuke_build_helpers/secrets.md`).
 - CLI commands: author verbs (`Fetch`, `Version`, `Interactive`, `Bump`,
   `BumpAndForget`, `StatusWatch`, `Run`, `Test`, `Build`, `Publish`,
-  `GithubWorkflow`, `AzureWorkflow`), pipeline-internal unlisted pair
-  (`PipelinePreSetup`, `PipelinePostSetup`), `DeleteOriginTags` maintenance verb
-  (gated — see Out of scope), default verb `Interactive`
+  `GitHubWorkflow` (frozen wire `GithubWorkflow`, legacy name accepted),
+  `AzureWorkflow`), pipeline-internal unlisted trio
+  (`PipelinePreSetup`, `PipelinePostSetup`, `PipelineEntryRun`), `DeleteOriginTags`
+  maintenance verb
+  (gated — see Out of scope), default verb `Interactive`.
+  Shell routing lives in `Plutonium.Shell` (`PlutoniumVerbCommands.cs`,
+  `AddPlutoniumShell` in `PlutoniumShellExtensions.cs`)
   (see `docs/nuke_build_helpers/cli-commands.md`).
+- Runner scripts: committed root `build.sh` / `build.ps1` / `build.cmd`
+  (repo-local SDK bootstrap when no usable `dotnet`, then build + test) and
+  consumer copy-in templates under `templates/` (see `docs/workflows.md`).
 - Interactive console: TTY-first picker over runnable tasks, app+part prompts with
   `--args` non-interactive fallback, `BuildOption` menu model, `ConsoleTableHelpers`
   snapshot + watch variants (see `docs/nuke_build_helpers/interactive-console.md`).
@@ -124,13 +142,15 @@ Every Helpers-facing feature (see `docs/nuke_build_helpers/index.md`):
 - TFMs: `net8.0` / `net9.0` / `net10.0` (matches Helpers today —
   see `docs/nuke_build_helpers/dependencies-stack.md`). `net11` is an open question,
   not included yet.
-- SDK pin: `global.json` `10.0.100` (`rollForward latestMajor`).
+- SDK pin: `global.json` `10.0.401` (`rollForward latestMajor`).
 - Version: `0.1.0` per `src/Directory.Build.props`.
 
 ## Out of scope (for 0.1.0)
 
 - Any dependency on `Nuke.Common` — PlutoniumBuild stands alone
-  (see `docs/packages.md`).
+  (see `docs/dev/packages.md`). The single third-party package,
+  `ApplicationBuilderHelpers` (`4.1.160`), lives only in `Plutonium.Shell`;
+  Core and Helpers stay dependency-free.
 - Verbatim copy-paste from `.inspirations/` — audited recreation only.
 - `Nuke.Components` shareable-capability interfaces — entries DSL supersedes them
   (see `docs/nuke_build/components.md`,
@@ -160,15 +180,16 @@ Every Helpers-facing feature (see `docs/nuke_build_helpers/index.md`):
 - `DeleteOriginTags` full-wipe (no-args) mode — dangerous maintenance op; gate or drop
   at implementation time, do not ship ungated.
 - macOS / container / arm runner variants — absent upstream; defer until demanded.
-- Future transports / pipelines beyond GitHub + Azure — reserved per `docs/packages.md`.
+- Future transports / pipelines beyond GitHub + Azure — reserved per `docs/dev/packages.md`.
 
 ## Open questions
 
 - TFMs: include `net11`? Stays open — `net8/9/10` ship first; decide before build
   based on SDK demand.
 - API-name compat: keep upstream names (`Nuke*`, `BaseNukeBuildHelpers`,
-  `NUKE_PRE_SETUP`, `nuke-cicd.yml`) vs rename to Plutonium names? Stays open —
-  no renaming decision in this freeze.
+  `nuke-cicd.yml`) vs rename to Plutonium names? Stays open — no broad renaming
+  decision in this freeze. Decided in code: the pre-setup payload variable is
+  `PLUTONIUM_PRE_SETUP`; `NUKE_PRE_SETUP` is a legacy inspiration reference only.
 - Logger choice: Serilog-compatible host vs lighter built-in host? Stays open —
   record the decision at implementation time.
 - Prompt-table lib choice: Sharprompt (upstream, `3.1.2`) vs equivalent? Stays open —

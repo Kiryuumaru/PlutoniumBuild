@@ -1,9 +1,9 @@
 # AGENTS.md — PlutoniumBuild Agent Rules
 
-> Status: Phase-1 landed. `src/Plutonium.Core`,
-> `src/Plutonium.Helpers` exist with Phase-1 code; `tests/`, `samples/`
-> remain **planned**.
-> Pins: `global.json` SDK `10.0.100` / `src/Directory.Build.props` version
+> Status: Phase-B landed. `src/Plutonium.Core`,
+> `src/Plutonium.Helpers`, `src/Plutonium.Shell` exist with landed code;
+> `tests/` landed, `samples/` remains **planned**.
+> Pins: `global.json` SDK `10.0.401` / `src/Directory.Build.props` version
 > `0.1.0` — do not invent release status.
 
 On conflict, **Section 9 Safe-agent overrides win**. On violation, fail fast
@@ -14,19 +14,28 @@ and state it.
 ```text
 /
 ├── AGENTS.md               # this file — agent working agreements
-├── README.md               # purpose, inspirations, planned packages, status
-├── PlutoniumBuild.sln     # solution (Phase-1 landed)
-├── global.json             # SDK pin only: 10.0.100, rollForward latestMajor
+├── README.md               # user how-to (what/why/getting-started/CLI)
+├── PlutoniumBuild.sln     # solution (Phase-B landed)
+├── global.json             # SDK pin only: 10.0.401, rollForward latestMajor
+├── build.sh                # repo runner: bootstrap SDK when missing, then build + test (bash)
+├── build.ps1               # repo runner: same, in Windows PowerShell
+├── build.cmd               # repo runner: Windows CMD wrapper for build.ps1
+├── .gitattributes          # LF guards for *.sh / *.cmd
 ├── src/
 │   ├── CONCEPT.md          # 1-page recreate intent
 │   ├── Directory.Build.props # version/LangVersion/TFM settings
-│   ├── Plutonium.Core/     # LANDED Phase-1 — runner, CLI, logging, path, process
-│   └── Plutonium.Helpers/  # LANDED Phase-1 — entry stubs, AppId, run contexts
-├── tests/                  # PLANNED
+│   ├── Plutonium.Core/     # LANDED — target runner, logging, path, process, workflows (subfolders)
+│   ├── Plutonium.Helpers/  # LANDED — entries, AppId, run contexts, pipelines (subfolders)
+│   └── Plutonium.Shell/    # LANDED — CLI/app shell on ApplicationBuilderHelpers 4.1.160
+├── tests/                  # LANDED — Core / Helpers / Shell test projects
 ├── samples/                # PLANNED
+├── templates/              # consumer runner templates (build.sh / build.ps1 / build.cmd)
 ├── docs/
-│   ├── index.md            # docs entry point
-│   ├── packages.md         # Phase-1 package status
+│   ├── index.md            # user docs hub (getting-started/CLI/versioning/workflows)
+│   ├── cli.md              # CLI reference (verbs, options, exit codes)
+│   ├── versioning.md       # versioning how-to (AppId, Bump, tags)
+│   ├── workflows.md        # CI-generation how-to (GitHub/Azure emitters)
+│   ├── dev/                # developer docs (packages.md, architecture.md)
 │   ├── agents/             # workflow config (issue-tracker, triage-labels, domain)
 │   └── concepts/
 │       └── scope.md        # AUTHORITATIVE in/out scope for 0.1.0
@@ -42,7 +51,7 @@ and state it.
   (`Nuke.Common` dependency, copy-paste). Mark open questions there; do not
   invent scope elsewhere.
 - `src/CONCEPT.md` states recreate intent (1 page).
-- `docs/packages.md` states Phase-1 package status (Core vs Helpers vs future).
+- `docs/dev/packages.md` states Phase-B package status (Core vs Helpers vs Shell vs future).
 - Code is source of truth; docs follow code. Never
   document an unbuilt feature as built.
 - Inspirations under `.inspirations/` are read-only audit references. Audited
@@ -50,9 +59,11 @@ and state it.
 
 ## 3. Commands
 
-- `dotnet build PlutoniumBuild.sln` — build landed Phase-1 `src/` projects.
-- `dotnet test` — run `tests/` once they land (still planned — do not claim
-  they pass today).
+- `./build.sh` (`./build.cmd` on Windows) — bootstrap the pinned SDK when no
+  usable `dotnet` is on `PATH` (repo-local `.plutonium/temp`, disposable),
+  then build + test.
+- `dotnet build PlutoniumBuild.sln` — build landed `src/` + `tests/` projects.
+- `dotnet test` — run landed `tests/` (green on `net8.0` / `net9.0` / `net10.0`).
 
 Docs tooling: none yet. Record verification as `Not run (docs-only)` unless
 project docs tooling is added.
@@ -63,7 +74,6 @@ Applies to landed code; state as gate, not current status:
 
 - `0 warnings / 0 errors` on build.
 - `100%` tests pass.
-- `tests/` still planned: gate is aspirational until they land — do not claim it is met.
 
 ## 5. C# standards
 
