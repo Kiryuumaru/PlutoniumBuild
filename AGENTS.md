@@ -35,6 +35,8 @@ and state it.
 │   ├── cli.md              # CLI reference (verbs, options, exit codes)
 │   ├── versioning.md       # versioning how-to (AppId, Bump, tags)
 │   ├── workflows.md        # CI-generation how-to (GitHub/Azure emitters)
+│   ├── terminal-calls.md   # how-to: run any external tool from a step
+│   ├── secrets.md          # how-to: declare secrets and environment keys
 │   ├── dev/                # developer docs (packages.md, architecture.md)
 │   ├── agents/             # workflow config (issue-tracker, triage-labels, domain)
 │   └── concepts/

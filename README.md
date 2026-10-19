@@ -6,6 +6,7 @@ Define your build steps in C#, run them from your terminal or in CI, and generat
 
 ## Why use it
 
+- Automate CI/CD for any repository and any stack: steps are C# entries, and any step can run any external tool as a terminal call.
 - Describe what to test, build, and publish once, then run the same entries on your machine and in CI's per-entry jobs.
 - Your CI workflow files are generated from those definitions, so they cannot drift out of sync.
 - Each app gets its own version line, with commands to inspect and release new versions.
@@ -69,6 +70,26 @@ mybuild shell github-workflow          # regenerate the CI file
 
 Add `--list` to any command to preview its steps instead of running them.
 
+## Run any stack (terminal calls)
+
+A step runs any external tool you need — npm, cargo, make, a script — through the terminal. In your build class:
+
+```csharp
+using Plutonium.Core.Process;
+using Plutonium.Helpers.Entries.Definitions;
+using Plutonium.Helpers.Entries.Extensions;
+
+public BuildEntry Compile => definition => definition
+    .AppId("myapp")
+    .Execute(async context =>
+    {
+        var result = await context.Terminal.RunAsync(new PlutoniumProcessRequest("npm", "ci"));
+        result.EnsureSucceeded();
+    });
+```
+
+There is no shell: pass the executable plus one raw argument string, and quote arguments for your OS yourself. On Windows, run `.cmd` shims such as `npm` through `cmd`, for example `new PlutoniumProcessRequest("cmd", "/c npm ci")`. Output is captured, masked, and forwarded to the run log when the tool exits; a non-zero exit code surfaces through `EnsureSucceeded`. See [Terminal calls](docs/terminal-calls.md) for the contract.
+
 ## Running it
 
 With no arguments your app opens an interactive picker over everything it can do. Otherwise use `shell` plus a verb — see the [CLI reference](docs/cli.md) for all 16 verbs, aliases, options, and exit codes.
@@ -85,6 +106,8 @@ With no arguments your app opens an interactive picker over everything it can do
 - [CLI reference](docs/cli.md) — every command, alias, option, and exit code.
 - [Versioning](docs/versioning.md) — check versions and release new ones.
 - [Workflows](docs/workflows.md) — generate the CI files from your steps.
+- [Terminal calls](docs/terminal-calls.md) — run any external tool from a step.
+- [Secrets](docs/secrets.md) — declare secrets and understand their environment keys.
 - [Authoritative scope for 0.1.0](docs/concepts/scope.md) — developer doc: what is and is not included.
 - [Packages](docs/dev/packages.md) — developer doc: what each library covers.
 - [Architecture](docs/dev/architecture.md) — developer doc: how the three libraries fit together.

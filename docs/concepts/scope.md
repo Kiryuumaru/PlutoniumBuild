@@ -49,11 +49,14 @@ Standalone runner replacing what Helpers reuses from Nuke directly
   (see `docs/nuke_build/ci-generation-adapters.md`,
   `docs/nuke_build_helpers/workflows-github.md`, `workflows-azure.md`,
   `workflows-local.md`).
-- Minimal process runner + narrow tool surface: env, capture, exit codes, secret masking;
-  `dotnet` / `git` / `gh` equivalents only — the surface Helpers actually invokes
-  (`Tool Git` / `Tool Gh`, `ls-remote`, `repo view`, dotnet build/test/publish-style calls)
+- Minimal process runner + narrow typed tool surface: env, capture, exit codes, secret masking;
+  `dotnet` / `git` / `gh` typed wrappers for the calls Helpers actually invokes
+  (`Tool Git` / `Tool Gh`, `ls-remote`, `repo view`, dotnet build/test/publish-style calls),
+  plus the terminal façade (`PlutoniumTerminal`, entry-facing via `IRunContext.Terminal`)
+  that runs arbitrary external tools with captured, masked output forwarded to the run log
+  after completion (stdout Information, stderr Warning; no streaming, no shell)
   (see `docs/nuke_build/tooling-wrappers.md`,
-  `docs/nuke_build_helpers/dependencies-stack.md`).
+  `docs/nuke_build_helpers/dependencies-stack.md`, `docs/terminal-calls.md`).
 - Path / file utilities piecemeal, only what entries need: globbing, zip (assets),
   JSON/YAML, path predicates, hashing (MD5/SHA-1/SHA-256/SHA-512)
   (see `docs/nuke_build/utilities-misc.md`,
@@ -68,10 +71,10 @@ Every Helpers-facing feature (see `docs/nuke_build_helpers/index.md`):
   defaults, fluent extensions (sync/async × context/no-context), `AppId` REQUIRED rule,
   `Matrix` expansion, `ExecuteBeforeBuild`, `DisplayName` / `WorkflowId` / `WorkflowBuilder`
   (see `docs/nuke_build_helpers/entries-dsl.md`).
-- Run context: `IRunContext` (`PipelineType` + `Apps` map) / `AppRunContext`
+- Run context: `IRunContext` (`PipelineType` + `Apps` map + `Terminal`) / `AppRunContext`
   (`AppId`, `RunType`, `AppVersion`, `BumpVersion` / `PullRequestVersion`, per-app
   `OutputDirectory`), `RunType` flags, bump/PR payload models, local-vs-pipeline setup
-  paths (see `docs/nuke_build_helpers/run-context.md`).
+  paths (see `docs/nuke_build_helpers/run-context.md`, `docs/terminal-calls.md`).
 - Versioning / tags / bump: `{appId}/{SemVersion}` tag scheme, `GetAllVersions` taxonomy,
   semver bump semantics (Major/Minor/Patch/prerelease), branch-bound prereleases,
   `-failed` markers, `bump-*` trigger tags, `--args` bump mini-language,
@@ -112,7 +115,9 @@ Every Helpers-facing feature (see `docs/nuke_build_helpers/index.md`):
   release assets (`AddReleaseAsset` + hash append); temp-root layout
   (see `docs/nuke_build_helpers/caching-artifacts-assets.md`).
 - Secrets: `[SecretVariable]`-equivalent declarative attribute + reflection scan +
-  export/mask at pre/post-setup (see `docs/nuke_build_helpers/secrets.md`).
+  export/mask at pre/post-setup; generated env keys are `PLUTONIUM_<NAME>` (override
+  per secret), and keys colliding with reserved pipeline wiring are rejected at
+  generation (see `docs/nuke_build_helpers/secrets.md`, `docs/secrets.md`).
 - CLI commands: author verbs (`Fetch`, `Version`, `Interactive`, `Bump`,
   `BumpAndForget`, `StatusWatch`, `Run`, `Test`, `Build`, `Publish`,
   `GitHubWorkflow` (frozen wire `GithubWorkflow`, legacy name accepted),
@@ -164,10 +169,11 @@ Every Helpers-facing feature (see `docs/nuke_build_helpers/index.md`):
 - CI adapters beyond GitHub + Azure: AppVeyor, Bamboo, Bitbucket, Bitrise, GitLab,
   Jenkins, SpaceAutomation, TeamCity, TravisCI — 9 of 11 adapters excluded
   (see `docs/nuke_build/ci-generation-adapters.md`).
-- Tool wrappers beyond `dotnet` / `git` / `gh` surface: remaining 63 of 66 wrappers
+- Tool wrappers beyond `dotnet` / `git` / `gh` surface: remaining 63 of 66 typed wrappers
   (Docker, MSBuild, NuGet, Npm, PowerShell, SignTool, SonarScanner, VSTest, Xunit,
-  notifiers, etc.) are future catalog, not 0.1.0
-  (see `docs/nuke_build/tooling-wrappers.md`).
+  notifiers, etc.) are future catalog, not 0.1.0. Generic terminal calls are NOT new typed
+  wrappers — `PlutoniumTerminal` runs any external tool through one request-based API
+  (see `docs/nuke_build/tooling-wrappers.md`, `docs/terminal-calls.md`).
 - `Nuke.Tooling.Generator`, `Nuke.MSBuildTasks`, `Nuke.Utilities.*` wholesale —
   port only the globbing/compression/JSON/YAML/path pieces entries need
   (see `docs/nuke_build/utilities-misc.md`).
@@ -182,6 +188,21 @@ Every Helpers-facing feature (see `docs/nuke_build_helpers/index.md`):
 - macOS / container / arm runner variants — absent upstream; defer until demanded.
 - Future transports / pipelines beyond GitHub + Azure — reserved per `docs/dev/packages.md`.
 
+## Direction — adoption beyond this repository
+
+PlutoniumBuild is adoptable by any repository and any stack. Entries are C# steps; any
+step can run any external tool as a terminal call, so the repository being built can
+use any language or toolchain — the build definition itself stays a small .NET
+project. Terminal calls are built (`PlutoniumTerminal` via `IRunContext.Terminal`,
+see `docs/terminal-calls.md`).
+
+Explicitly later, not built at 0.1.0:
+
+- Packaging / distribution (for example NuGet packages) — not built; consumers
+  reference the projects directly today.
+- One-line init / scaffold — consumers wire the entry point themselves and copy the
+  runner templates from `templates/` (see `docs/workflows.md`).
+
 ## Open questions
 
 - TFMs: include `net11`? Stays open — `net8/9/10` ship first; decide before build
@@ -190,6 +211,10 @@ Every Helpers-facing feature (see `docs/nuke_build_helpers/index.md`):
   `nuke-cicd.yml`) vs rename to Plutonium names? Stays open — no broad renaming
   decision in this freeze. Decided in code: the pre-setup payload variable is
   `PLUTONIUM_PRE_SETUP`; `NUKE_PRE_SETUP` is a legacy inspiration reference only.
+  Secret env keys are `PLUTONIUM_<NAME>` (`NUKE_<NAME>` in the inspirations) with a
+  per-secret override; a key that collides with reserved pipeline wiring fails
+  workflow generation, and old generated workflows must be regenerated
+  (see `docs/secrets.md`).
 - Logger choice: Serilog-compatible host vs lighter built-in host? Stays open —
   record the decision at implementation time.
 - Prompt-table lib choice: Sharprompt (upstream, `3.1.2`) vs equivalent? Stays open —

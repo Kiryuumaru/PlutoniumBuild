@@ -13,6 +13,8 @@ Run these after changing your steps. Sources: `src/Plutonium.Helpers/App/Plutoni
 
 Entry ids name the generated entry jobs. Every final id — including one set through `WorkflowId` or `Id` — must use ASCII letters, digits, `_`, or `-`, starting with a letter or `_`; an invalid id fails regeneration with an error naming it. Regenerate existing workflow files after upgrading; no compatibility path is provided.
 
+Secrets are part of the generated files too: the workflow environment maps each declared secret to `PLUTONIUM_<NAME>` (or its per-secret override). Regenerate after adding, renaming, or re-keying a secret. Files generated before the `PLUTONIUM_` prefix change carry the older `NUKE_<NAME>` key and must be regenerated. See [Secrets](secrets.md). Sources: `src/Plutonium.Helpers/Pipelines/PlutoniumPipelineDetection.cs:171-198`, `src/Plutonium.Helpers/App/PlutoniumSecretDeclaration.cs:36-40`.
+
 | Command | File it writes |
 | ------- | -------------- |
 | `shell github-workflow` | `.github/workflows/<name>.yml` under your repository root |

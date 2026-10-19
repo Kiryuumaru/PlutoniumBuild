@@ -10,6 +10,14 @@ The [README](../README.md) shows what PlutoniumBuild is, why to use it, and how 
 
 Copy the runner templates — [`build.sh`](../templates/build.sh), `build.ps1`, `build.cmd` — into your repository root so your build runs on a machine without the SDK; edit one line to point them at your build project. See [Runner scripts](workflows.md#runner-scripts).
 
+## Running any tool
+
+[Terminal calls](terminal-calls.md) — run any external tool from a step: request shape, no shell, output capture and forwarding, timeout, and failure handling.
+
+## Secrets
+
+[Secrets](secrets.md) — declare a secret, create it in your repository or pipeline, and understand the `PLUTONIUM_<NAME>` environment key, reserved names, and masking.
+
 ## CLI reference
 
 [CLI reference](cli.md) — every command, its aliases, the shared options, and exit codes.
