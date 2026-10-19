@@ -32,7 +32,7 @@ public sealed class PlutoniumSecretVariableAttribute : Attribute
     /// Initializes a new instance of the <see cref="PlutoniumSecretVariableAttribute"/> class.
     /// </summary>
     /// <param name="secretVariableName">The secret name. Must not be null or whitespace.</param>
-    /// <param name="environmentVariableName">Optional environment override. Defaults to <c>NUKE_</c> plus the secret name.</param>
+    /// <param name="environmentVariableName">Optional environment override. Defaults to <c>PLUTONIUM_</c> plus the secret name.</param>
     public PlutoniumSecretVariableAttribute(string secretVariableName, string? environmentVariableName = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(secretVariableName);

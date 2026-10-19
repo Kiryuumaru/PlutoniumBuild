@@ -365,11 +365,11 @@ public static class PlutoniumBuildVerbs
 
         if (entry is ITargetEntryDefinition target)
         {
-            PlutoniumEntryRunner.SetupTargetRunContexts([target], apps, context.Options, context.PipelineType);
+            PlutoniumEntryRunner.SetupTargetRunContexts([target], apps, context.Options, context.PipelineType, context.Services);
         }
         else if (entry is IDependentEntryDefinition dependent)
         {
-            PlutoniumEntryRunner.SetupDependentRunContexts([dependent], apps, context.Options, context.PipelineType);
+            PlutoniumEntryRunner.SetupDependentRunContexts([dependent], apps, context.Options, context.PipelineType, context.Services);
         }
         else
         {

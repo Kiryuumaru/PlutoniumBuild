@@ -155,11 +155,19 @@ public static class PlutoniumPipelineDetection
     /// <summary>
     /// Builds the workflow-level environment map: the pipeline token plus one entry per declared secret.
     /// </summary>
+    /// <remarks>
+    /// A secret whose environment variable name collides with the token entry, another secret,
+    /// or a reserved Plutonium wire variable (<c>PLUTONIUM_PRE_SETUP</c>, <c>PLUTONIUM_ENTRY</c>,
+    /// <c>PLUTONIUM_ALLOW_TAG_WIPE</c>, <c>PLUTONIUM_APP_PROJECT</c>) is rejected.
+    /// Comparisons are case-insensitive because generated workflows can run on hosts with
+    /// case-insensitive environment names (Windows).
+    /// </remarks>
     /// <param name="build">The build instance. Must not be null.</param>
     /// <param name="tokenName">The token variable name. Must not be null or whitespace.</param>
     /// <param name="tokenExpression">The token expression. Must not be null or whitespace.</param>
     /// <param name="secretExpression">Maps a secret name to its expression. Must not be null.</param>
     /// <returns>The environment map. Never null.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when a secret environment variable name case-insensitively collides with existing pipeline wiring.</exception>
     public static IReadOnlyDictionary<string, string> BuildWorkflowEnv(
         object build,
         string tokenName,
@@ -170,13 +178,20 @@ public static class PlutoniumPipelineDetection
         ArgumentException.ThrowIfNullOrWhiteSpace(tokenName);
         ArgumentException.ThrowIfNullOrWhiteSpace(tokenExpression);
         ArgumentNullException.ThrowIfNull(secretExpression);
-        var env = new Dictionary<string, string>(StringComparer.Ordinal)
+        var env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             [tokenName.Trim()] = tokenExpression.Trim(),
         };
         foreach (var declaration in PlutoniumSecrets.GetSecretVariables(build))
         {
-            env[declaration.EnvironmentVariableName] = secretExpression(declaration.Secret.SecretVariableName);
+            var environmentName = declaration.EnvironmentVariableName;
+            if (env.ContainsKey(environmentName) || ReservedWireVariableNames.Contains(environmentName))
+            {
+                throw new InvalidOperationException(
+                    $"Secret '{declaration.Secret.SecretVariableName}' cannot be exported as environment variable '{environmentName}': the key is reserved for pipeline wiring or already used by the pipeline token or another secret; key comparisons are case-insensitive. Rename the secret or set an explicit environment variable name.");
+            }
+
+            env[environmentName] = secretExpression(declaration.Secret.SecretVariableName);
         }
 
         return env;
@@ -301,6 +316,14 @@ public static class PlutoniumPipelineDetection
         ArgumentException.ThrowIfNullOrWhiteSpace(mainEnvironmentBranch);
         PlutoniumVersions.ValidateEnvironmentBranches(environmentBranches, mainEnvironmentBranch);
     }
+
+    private static readonly HashSet<string> ReservedWireVariableNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        PlutoniumPipelineContract.PayloadVariableName,
+        PlutoniumPipelineContract.EntryVariableName,
+        "PLUTONIUM_ALLOW_TAG_WIPE",
+        "PLUTONIUM_APP_PROJECT",
+    };
 
     private static string NormalizeKey(string entryId) =>
         entryId.Trim().Replace("-", ".", StringComparison.Ordinal);

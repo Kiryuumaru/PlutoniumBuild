@@ -120,10 +120,10 @@ public static class PlutoniumPreSetup
         PlutoniumEntryRunner.SetupTargetRunContexts(
             entries.BuildEntries.Values.Cast<ITargetEntryDefinition>()
                 .Concat(entries.PublishEntries.Values.Cast<ITargetEntryDefinition>()),
-            apps, context.Options, run.PipelineType);
+            apps, context.Options, run.PipelineType, context.Services);
         PlutoniumEntryRunner.SetupDependentRunContexts(
             entries.TestEntries.Values.Cast<IDependentEntryDefinition>(),
-            apps, context.Options, run.PipelineType);
+            apps, context.Options, run.PipelineType, context.Services);
 
         var payload = await BuildPayloadAsync(context, run, entries, apps, buildId, lastBuildId, cancellationToken).ConfigureAwait(false);
         context.PreSetup = payload;

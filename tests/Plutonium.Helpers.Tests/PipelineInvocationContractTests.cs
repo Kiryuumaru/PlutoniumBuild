@@ -240,6 +240,122 @@ public sealed class PipelineInvocationContractTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// Verifies a declared secret without an explicit environment name is emitted under the
+    /// <c>PLUTONIUM_</c> prefix with the pipeline's secret expression, and the retired
+    /// <c>NUKE_</c> prefix never appears in the workflow environment or rendered YAML.
+    /// </summary>
+    /// <param name="azure">True for the Azure pipeline; otherwise the GitHub pipeline.</param>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeclaredSecret_UsesPlutoniumPrefixedEnvironmentKey(bool azure)
+    {
+        var pipelineType = azure ? PlutoniumPipelineType.Azure : PlutoniumPipelineType.GitHub;
+        var context = CreateContext(
+            pipelineType,
+            CreateEntries(),
+            new RecordingSink(),
+            build: new SecretPrefixBuild());
+
+        var result = await (azure ? new PlutoniumAzurePipeline() : (IPlutoniumPipeline)new PlutoniumGitHubPipeline())
+            .BuildWorkflowAsync(context);
+
+        var expectedExpression = azure ? "$(MY_TOKEN)" : "${{ secrets.MY_TOKEN }}";
+        var tokenName = azure ? "SYSTEM_ACCESSTOKEN" : "GITHUB_TOKEN";
+        Assert.Equal(expectedExpression, result.Document.Env["PLUTONIUM_MY_TOKEN"]);
+        Assert.True(result.Document.Env.ContainsKey(tokenName));
+        Assert.DoesNotContain(result.Document.Env.Keys, key => key.StartsWith("NUKE_", StringComparison.Ordinal));
+        var yaml = result.Document.WriteYaml();
+        Assert.Contains("PLUTONIUM_MY_TOKEN", yaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("NUKE_MY_TOKEN", yaml, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies workflow generation rejects a secret environment key that collides
+    /// case-insensitively with reserved pipeline wiring, the pipeline token, or another
+    /// secret, naming both the secret and the colliding key.
+    /// </summary>
+    /// <param name="azure">True for the Azure pipeline; otherwise the GitHub pipeline.</param>
+    /// <param name="collision">
+    /// The collision shape: one of the reserved shapes <c>reserved</c>, <c>reserved-entry</c>,
+    /// <c>reserved-allow-tag-wipe</c>, or <c>reserved-app-project</c>; <c>token</c>; <c>duplicate</c>;
+    /// or the case-variant forms <c>reserved-case</c>, <c>token-case</c>, or <c>duplicate-case</c>.
+    /// </param>
+    [Theory]
+    [InlineData(false, "reserved")]
+    [InlineData(true, "reserved")]
+    [InlineData(false, "reserved-entry")]
+    [InlineData(true, "reserved-entry")]
+    [InlineData(false, "reserved-allow-tag-wipe")]
+    [InlineData(true, "reserved-allow-tag-wipe")]
+    [InlineData(false, "reserved-app-project")]
+    [InlineData(true, "reserved-app-project")]
+    [InlineData(false, "token")]
+    [InlineData(true, "token")]
+    [InlineData(false, "duplicate")]
+    [InlineData(true, "duplicate")]
+    [InlineData(false, "reserved-case")]
+    [InlineData(true, "reserved-case")]
+    [InlineData(false, "token-case")]
+    [InlineData(true, "token-case")]
+    [InlineData(false, "duplicate-case")]
+    [InlineData(true, "duplicate-case")]
+    public async Task WorkflowGeneration_RejectsSecretEnvironmentKeyCollision(bool azure, string collision)
+    {
+        var pipelineType = azure ? PlutoniumPipelineType.Azure : PlutoniumPipelineType.GitHub;
+        var context = CreateContext(
+            pipelineType,
+            CreateEntries(),
+            new RecordingSink(),
+            build: CollisionBuildFor(collision, azure));
+        IPlutoniumPipeline pipeline = azure ? new PlutoniumAzurePipeline() : new PlutoniumGitHubPipeline();
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => pipeline.BuildWorkflowAsync(context));
+
+        var (secretName, environmentKey) = collision switch
+        {
+            "reserved" => ("PRE_SETUP", "PLUTONIUM_PRE_SETUP"),
+            "reserved-entry" => ("ENTRY_ALIAS", "PLUTONIUM_ENTRY"),
+            "reserved-allow-tag-wipe" => ("ALLOW_TAG_WIPE_ALIAS", "PLUTONIUM_ALLOW_TAG_WIPE"),
+            "reserved-app-project" => ("APP_PROJECT_ALIAS", "PLUTONIUM_APP_PROJECT"),
+            "token" => ("TOKEN_ALIAS", azure ? "SYSTEM_ACCESSTOKEN" : "GITHUB_TOKEN"),
+            "duplicate" => ("DUPLICATE", "PLUTONIUM_DUPLICATE"),
+            "reserved-case" => ("PRE_SETUP_ALIAS", "plutonium_pre_setup"),
+            "token-case" => ("TOKEN_ALIAS", azure ? "system_accesstoken" : "github_token"),
+            "duplicate-case" => ("DUPLICATE_CASE_SECOND", "plutonium_duplicate_case"),
+            _ => throw new ArgumentOutOfRangeException(nameof(collision), collision, "Unknown collision shape."),
+        };
+        Assert.Contains($"Secret '{secretName}'", failure.Message, StringComparison.Ordinal);
+        Assert.Contains($"environment variable '{environmentKey}'", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("reserved for pipeline wiring", failure.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies a case-variant environment key that collides with nothing is accepted and
+    /// keeps its authored casing through workflow generation, so the case-insensitive
+    /// collision check neither rejects nor rewrites a harmless key.
+    /// </summary>
+    [Fact]
+    public async Task WorkflowGeneration_AcceptsCaseVariantNonReservedSecretKey()
+    {
+        var context = CreateContext(
+            PlutoniumPipelineType.GitHub,
+            CreateEntries(),
+            new RecordingSink(),
+            build: new CaseVariantTokenBuild());
+
+        var result = await new PlutoniumGitHubPipeline().BuildWorkflowAsync(context);
+
+        Assert.Equal("${{ secrets.LOWER_TOKEN }}", result.Document.Env["plutonium_lower_token"]);
+        Assert.Contains("plutonium_lower_token", result.Document.Env.Keys);
+        Assert.DoesNotContain("PLUTONIUM_LOWER_TOKEN", result.Document.Env.Keys);
+        var yaml = result.Document.WriteYaml();
+        Assert.Contains("plutonium_lower_token", yaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("PLUTONIUM_LOWER_TOKEN", yaml, StringComparison.Ordinal);
+    }
+
     /// <summary>Verifies a missing entry selector fails with the regeneration diagnostic.</summary>
     [Fact]
     public async Task EntryRun_MissingEntrySelectorFailsWithDiagnostic()
@@ -359,6 +475,8 @@ public sealed class PipelineInvocationContractTests : IDisposable
 
         var runContext = Assert.IsType<PlutoniumRunContext>(captured);
         Assert.Equal(PlutoniumPipelineType.GitHub, runContext.PipelineType);
+        Assert.NotNull(runContext.Terminal);
+        Assert.Same(context.Services.Terminal, runContext.Terminal);
         var app = Assert.Single(runContext.Apps).Value;
         Assert.Equal(new PlutoniumAppId("my-app"), app.AppId);
         Assert.Equal(PlutoniumRunType.Bump, app.RunType);
@@ -501,6 +619,104 @@ public sealed class PipelineInvocationContractTests : IDisposable
         }
     }
 
+    private static object CollisionBuildFor(string collision, bool azure) => collision switch
+    {
+        "reserved" => new ReservedKeyBuild(),
+        "reserved-entry" => new ReservedEntryKeyBuild(),
+        "reserved-allow-tag-wipe" => new ReservedAllowTagWipeKeyBuild(),
+        "reserved-app-project" => new ReservedAppProjectKeyBuild(),
+        "token" => azure ? new AzureTokenKeyBuild() : new GitHubTokenKeyBuild(),
+        "duplicate" => new DuplicateKeyBuild(),
+        "reserved-case" => new ReservedCaseKeyBuild(),
+        "token-case" => azure ? new AzureLowerTokenKeyBuild() : new GitHubLowerTokenKeyBuild(),
+        "duplicate-case" => new DuplicateCaseKeyBuild(),
+        _ => throw new ArgumentOutOfRangeException(nameof(collision), collision, "Unknown collision shape."),
+    };
+
+    private sealed class SecretPrefixBuild
+    {
+        [PlutoniumSecretVariable("MY_TOKEN")]
+        public string? Token { get; set; }
+    }
+
+    private sealed class ReservedKeyBuild
+    {
+        [PlutoniumSecretVariable("PRE_SETUP")]
+        public string? Payload { get; set; }
+    }
+
+    private sealed class GitHubTokenKeyBuild
+    {
+        [PlutoniumSecretVariable("TOKEN_ALIAS", "GITHUB_TOKEN")]
+        public string? Token { get; set; }
+    }
+
+    private sealed class AzureTokenKeyBuild
+    {
+        [PlutoniumSecretVariable("TOKEN_ALIAS", "SYSTEM_ACCESSTOKEN")]
+        public string? Token { get; set; }
+    }
+
+    private sealed class DuplicateKeyBuild
+    {
+        [PlutoniumSecretVariable("DUPLICATE")]
+        public string? First { get; set; }
+
+        [PlutoniumSecretVariable("DUPLICATE")]
+        public string? Second { get; set; }
+    }
+
+    private sealed class ReservedCaseKeyBuild
+    {
+        [PlutoniumSecretVariable("PRE_SETUP_ALIAS", "plutonium_pre_setup")]
+        public string? Payload { get; set; }
+    }
+
+    private sealed class ReservedEntryKeyBuild
+    {
+        [PlutoniumSecretVariable("ENTRY_ALIAS", "PLUTONIUM_ENTRY")]
+        public string? Payload { get; set; }
+    }
+
+    private sealed class ReservedAllowTagWipeKeyBuild
+    {
+        [PlutoniumSecretVariable("ALLOW_TAG_WIPE_ALIAS", "PLUTONIUM_ALLOW_TAG_WIPE")]
+        public string? Payload { get; set; }
+    }
+
+    private sealed class ReservedAppProjectKeyBuild
+    {
+        [PlutoniumSecretVariable("APP_PROJECT_ALIAS", "PLUTONIUM_APP_PROJECT")]
+        public string? Payload { get; set; }
+    }
+
+    private sealed class GitHubLowerTokenKeyBuild
+    {
+        [PlutoniumSecretVariable("TOKEN_ALIAS", "github_token")]
+        public string? Token { get; set; }
+    }
+
+    private sealed class AzureLowerTokenKeyBuild
+    {
+        [PlutoniumSecretVariable("TOKEN_ALIAS", "system_accesstoken")]
+        public string? Token { get; set; }
+    }
+
+    private sealed class DuplicateCaseKeyBuild
+    {
+        [PlutoniumSecretVariable("DUPLICATE_CASE_FIRST", "PLUTONIUM_DUPLICATE_CASE")]
+        public string? First { get; set; }
+
+        [PlutoniumSecretVariable("DUPLICATE_CASE_SECOND", "plutonium_duplicate_case")]
+        public string? Second = null;
+    }
+
+    private sealed class CaseVariantTokenBuild
+    {
+        [PlutoniumSecretVariable("LOWER_TOKEN", "plutonium_lower_token")]
+        public string? Token { get; set; }
+    }
+
     private static PlutoniumRunnerOS CreateRunnerOS(string name) => name switch
     {
         "ubuntu-latest" => PlutoniumRunnerOS.UbuntuLatest,
@@ -575,7 +791,8 @@ public sealed class PipelineInvocationContractTests : IDisposable
         PlutoniumPipelineType pipelineType,
         PlutoniumAllEntries entries,
         RecordingSink sink,
-        string? repositoryRoot = null)
+        string? repositoryRoot = null,
+        object? build = null)
     {
         var logger = new PlutoniumLogger([sink]);
         var services = PlutoniumBuildServices.Create(
@@ -588,7 +805,7 @@ public sealed class PipelineInvocationContractTests : IDisposable
             new PlutoniumPath("/tmp/plutonium-out"),
             new PlutoniumPath("/tmp/plutonium-cache"),
             "https://example.test/org/repo.git");
-        return new PlutoniumPipelineContext(new object(), options, services, pipelineType) { Entries = entries };
+        return new PlutoniumPipelineContext(build ?? new object(), options, services, pipelineType) { Entries = entries };
     }
 
     private static string CreateTemporaryRepositoryRoot() =>

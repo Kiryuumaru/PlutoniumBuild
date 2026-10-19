@@ -30,4 +30,7 @@ public interface IRunContext
 
     /// <summary>Gets the per-app contexts keyed by AppId.</summary>
     IReadOnlyDictionary<PlutoniumAppId, AppRunContext> Apps { get; }
+
+    /// <summary>Gets the terminal surface for running external tools. Never null.</summary>
+    PlutoniumTerminal Terminal { get; }
 }

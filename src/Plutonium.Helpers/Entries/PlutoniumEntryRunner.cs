@@ -35,18 +35,21 @@ public static class PlutoniumEntryRunner
     /// <param name="apps">The per-app payload and run type. Must not be null.</param>
     /// <param name="options">The build options. Must not be null.</param>
     /// <param name="pipelineType">The pipeline type.</param>
+    /// <param name="services">The build services carrying the terminal. Must not be null.</param>
     public static void SetupTargetRunContexts(
         IEnumerable<ITargetEntryDefinition> entries,
         IReadOnlyDictionary<string, (PlutoniumAppRunEntry Entry, PlutoniumRunType RunType, string ReleaseNotes)> apps,
         PlutoniumBuildOptions options,
-        PlutoniumPipelineType pipelineType)
+        PlutoniumPipelineType pipelineType,
+        PlutoniumBuildServices services)
     {
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(apps);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(services);
         foreach (var entry in entries)
         {
-            SetupRunContext(entry, apps, options, pipelineType);
+            SetupRunContext(entry, apps, options, pipelineType, services);
         }
     }
 
@@ -58,18 +61,21 @@ public static class PlutoniumEntryRunner
     /// <param name="apps">The per-app payload and run type. Must not be null.</param>
     /// <param name="options">The build options. Must not be null.</param>
     /// <param name="pipelineType">The pipeline type.</param>
+    /// <param name="services">The build services carrying the terminal. Must not be null.</param>
     public static void SetupDependentRunContexts(
         IEnumerable<IDependentEntryDefinition> entries,
         IReadOnlyDictionary<string, (PlutoniumAppRunEntry Entry, PlutoniumRunType RunType, string ReleaseNotes)> apps,
         PlutoniumBuildOptions options,
-        PlutoniumPipelineType pipelineType)
+        PlutoniumPipelineType pipelineType,
+        PlutoniumBuildServices services)
     {
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(apps);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(services);
         foreach (var entry in entries)
         {
-            SetupRunContext(entry, apps, options, pipelineType);
+            SetupRunContext(entry, apps, options, pipelineType, services);
         }
     }
 
@@ -146,7 +152,8 @@ public static class PlutoniumEntryRunner
         IRunEntryDefinition entry,
         IReadOnlyDictionary<string, (PlutoniumAppRunEntry Entry, PlutoniumRunType RunType, string ReleaseNotes)> apps,
         PlutoniumBuildOptions options,
-        PlutoniumPipelineType pipelineType)
+        PlutoniumPipelineType pipelineType,
+        PlutoniumBuildServices services)
     {
         var contexts = new Dictionary<PlutoniumAppId, AppRunContext>();
         foreach (var appId in entry.AppIds)
@@ -179,6 +186,6 @@ public static class PlutoniumEntryRunner
                 appId, app.RunType, options.CommonOutputDirectory, appVersion, bump, pull);
         }
 
-        entry.RunContext = new PlutoniumRunContext(pipelineType, contexts);
+        entry.RunContext = new PlutoniumRunContext(pipelineType, contexts, services.Terminal);
     }
 }

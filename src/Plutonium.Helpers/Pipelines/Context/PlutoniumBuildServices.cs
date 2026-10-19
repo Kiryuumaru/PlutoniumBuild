@@ -20,7 +20,7 @@ using Plutonium.Helpers.App;
 
 namespace Plutonium.Helpers.Pipelines.Context;
 /// <summary>
-/// Live build services: git/gh/dotnet tool surfaces, logger, masker, host, and process runner.
+/// Live build services: git/gh/dotnet tool surfaces, terminal, logger, masker, host, and process runner.
 /// </summary>
 public sealed class PlutoniumBuildServices
 {
@@ -44,6 +44,9 @@ public sealed class PlutoniumBuildServices
 
     /// <summary>Gets the process runner. Never null.</summary>
     public PlutoniumProcessRunner ProcessRunner { get; }
+
+    /// <summary>Gets the terminal surface for running external tools. Never null.</summary>
+    public PlutoniumTerminal Terminal { get; }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PlutoniumBuildServices"/> class.
@@ -78,6 +81,7 @@ public sealed class PlutoniumBuildServices
         Masker = masker;
         Host = host;
         ProcessRunner = processRunner;
+        Terminal = new PlutoniumTerminal(processRunner, masker, logger);
     }
 
     /// <summary>

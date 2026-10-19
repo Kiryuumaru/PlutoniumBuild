@@ -30,17 +30,24 @@ public sealed class PlutoniumRunContext : IRunContext
     /// <summary>Gets the per-app contexts keyed by AppId.</summary>
     public IReadOnlyDictionary<PlutoniumAppId, AppRunContext> Apps { get; }
 
+    /// <summary>Gets the terminal surface for running external tools. Never null.</summary>
+    public PlutoniumTerminal Terminal { get; }
+
     /// <summary>
     /// Initializes a new instance of the <see cref="PlutoniumRunContext"/> class.
     /// </summary>
     /// <param name="pipelineType">The pipeline kind.</param>
     /// <param name="apps">The per-app contexts. Must not be null; keys must match each context's AppId.</param>
+    /// <param name="terminal">The terminal surface. Must not be null.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="apps"/> or <paramref name="terminal"/> is null.</exception>
     /// <exception cref="ArgumentException">Thrown when a key does not match its context's AppId.</exception>
     public PlutoniumRunContext(
         PlutoniumPipelineType pipelineType,
-        IReadOnlyDictionary<PlutoniumAppId, AppRunContext> apps)
+        IReadOnlyDictionary<PlutoniumAppId, AppRunContext> apps,
+        PlutoniumTerminal terminal)
     {
         ArgumentNullException.ThrowIfNull(apps);
+        ArgumentNullException.ThrowIfNull(terminal);
         foreach (var pair in apps)
         {
             ArgumentNullException.ThrowIfNull(pair.Key);
@@ -55,5 +62,6 @@ public sealed class PlutoniumRunContext : IRunContext
 
         PipelineType = pipelineType;
         Apps = apps;
+        Terminal = terminal;
     }
 }

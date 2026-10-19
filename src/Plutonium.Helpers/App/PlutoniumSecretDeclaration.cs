@@ -33,9 +33,9 @@ public sealed record PlutoniumSecretDeclaration(MemberInfo Member, PlutoniumSecr
     /// <summary>Gets the attribute. Never null.</summary>
     public PlutoniumSecretVariableAttribute Secret { get; init; } = Secret ?? throw new ArgumentNullException(nameof(Secret));
 
-    /// <summary>Gets the environment variable name: the override or <c>NUKE_</c> plus the secret name.</summary>
+    /// <summary>Gets the environment variable name: the override or <c>PLUTONIUM_</c> plus the secret name.</summary>
     public string EnvironmentVariableName =>
         string.IsNullOrWhiteSpace(Secret.EnvironmentVariableName)
-            ? "NUKE_" + Secret.SecretVariableName
+            ? "PLUTONIUM_" + Secret.SecretVariableName
             : Secret.EnvironmentVariableName.Trim();
 }
