@@ -6,6 +6,9 @@
 bin/
 obj/
 
+# Runner scratch: bootstrapped .NET SDK and installer download
+.plutonium/temp/
+
 # Confirmed doc exclusions
 HANDOVER.md
 docs/nuke_build/

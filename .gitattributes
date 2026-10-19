@@ -1,0 +1,6 @@
+* text=auto
+
+# Shell entry points must stay LF on checkout: Windows clones with
+# core.autocrlf=true would otherwise break their bash legs.
+*.sh text eol=lf
+*.cmd text eol=lf
