@@ -2,7 +2,9 @@
 
 > Developer documentation — for maintainers, not end users.
 >
-> Status: **authoritative for `0.1.0`**. Freezes Core vs Helpers boundaries for the 0.1.0 build.
+> Status: **authoritative for `0.1.0`**. Freezes the Core vs Helpers
+> boundaries plus the package/scaffold distribution boundary for the 0.1.0
+> build.
 >
 > - Decision (confirmed): scope is **everything `NukeBuildHelpers` is, plus polyfill of its
 >   `NukeBuild` dependencies**. Audited recreation only — no verbatim copy-paste —
@@ -12,14 +14,21 @@
 >   `docs/nuke_build_helpers/` (17 pages) and `docs/nuke_build/` (12 pages).
   (Note: these audit maps are local, untracked audit material — read-only
   references used during the recreate, not shipped with the repo.)
-> - Status: **Phase-B landed** (`src/Plutonium.Core/`,
->   `src/Plutonium.Helpers/`, `src/Plutonium.Shell/` exist with landed code;
->   `tests/` landed, `samples/` remains **planned**). Code is source of truth;
->   fix this doc if code evolves, never silently change code to match docs.
-> - Pins: `global.json` SDK `10.0.401`, `src/Directory.Build.props` version `0.1.0`.
+> - Status: **Phase-B plus distribution landed** (`src/Plutonium.Core/`,
+>   `src/Plutonium.Helpers/`, `src/Plutonium.Shell/`, and
+>   `src/PlutoniumBuild.Package/` exist with landed code; `scaffold/`,
+>   `init.sh`, and `init.ps1` landed; `tests/` landed, `samples/` remains
+>   **planned**). Code is source of truth; fix this doc if code evolves,
+>   never silently change code to match docs.
+> - Pins: `global.json` SDK `10.0.402` (`latestPatch`,
+>   `allowPrerelease: false`), `src/Directory.Build.props` version `0.1.0`.
+>   The `PlutoniumBuild` package targets `net10.0`; the three libraries stay
+>   `net8.0` / `net9.0` / `net10.0` for tests and set `IsPackable=false`.
 > - Dependency direction: Shell → Helpers → Core. Core stays BCL-only,
 >   Helpers stays library-only; the `ApplicationBuilderHelpers` (`4.1.160`)
->   reference lives only in `Plutonium.Shell`.
+>   reference lives only in `Plutonium.Shell` and in the package project.
+>   The package embeds all three libraries and declares no `Plutonium.*`
+>   package dependency.
 
 ## In scope — `Plutonium.Core` (polyfill of Helpers' Nuke deps)
 
@@ -117,7 +126,9 @@ Every Helpers-facing feature (see `docs/nuke_build_helpers/index.md`):
 - Secrets: `[SecretVariable]`-equivalent declarative attribute + reflection scan +
   export/mask at pre/post-setup; generated env keys are `PLUTONIUM_<NAME>` (override
   per secret), and keys colliding with reserved pipeline wiring are rejected at
-  generation (see `docs/nuke_build_helpers/secrets.md`, `docs/secrets.md`).
+  generation. An optional `EntryIds` scope limits generated GitHub entry jobs;
+  pre/post setup always receive declared secrets, and Azure keeps them as pipeline
+  variables (see `docs/nuke_build_helpers/secrets.md`, `docs/secrets.md`).
 - CLI commands: author verbs (`Fetch`, `Version`, `Interactive`, `Bump`,
   `BumpAndForget`, `StatusWatch`, `Run`, `Test`, `Build`, `Publish`,
   `GitHubWorkflow` (frozen wire `GithubWorkflow`, legacy name accepted),
@@ -128,9 +139,11 @@ Every Helpers-facing feature (see `docs/nuke_build_helpers/index.md`):
   Shell routing lives in `Plutonium.Shell` (`PlutoniumVerbCommands.cs`,
   `AddPlutoniumShell` in `PlutoniumShellExtensions.cs`)
   (see `docs/nuke_build_helpers/cli-commands.md`).
-- Runner scripts: committed root `build.sh` / `build.ps1` / `build.cmd`
+- Runner scripts: maintainer root `build.sh` / `build.ps1` / `build.cmd`
   (repo-local SDK bootstrap when no usable `dotnet`, then build + test) and
-  consumer copy-in templates under `templates/` (see `docs/workflows.md`).
+  the consumer scaffold (`scaffold/build/`, `scaffold/root/`) installed by
+  `init.sh` / `init.ps1` and refreshed by `build/update.*`
+  (see `docs/workflows.md`).
 - Interactive console: TTY-first picker over runnable tasks, app+part prompts with
   `--args` non-interactive fallback, `BuildOption` menu model, `ConsoleTableHelpers`
   snapshot + watch variants (see `docs/nuke_build_helpers/interactive-console.md`).
@@ -142,27 +155,63 @@ Every Helpers-facing feature (see `docs/nuke_build_helpers/index.md`):
   (see `docs/nuke_build_helpers/dependencies-stack.md`,
   `interactive-console.md`).
 
+## In scope — distribution and scaffold
+
+- Single NuGet package `PlutoniumBuild` in
+  `src/PlutoniumBuild.Package/`, targeting `net10.0`, MIT licensed, version
+  `0.1.0` from `src/Directory.Build.props`. It packs `Plutonium.Core`,
+  `Plutonium.Helpers`, and `Plutonium.Shell` (DLL, XML, PDB) under
+  `lib/net10.0` and declares `ApplicationBuilderHelpers` `4.1.160` as its
+  only dependency. There are no separate `Plutonium.Core` / `Plutonium.Helpers`
+  / `Plutonium.Shell` packages, and no `Plutonium.*` package dependencies
+  (see `docs/dev/packages.md`).
+- Consumer scaffold in `scaffold/build/` (build app, package pin, lock,
+  launchers, updater, SDK bootstrap) plus thin root wrappers in
+  `scaffold/root/`. The scaffold build app targets `net10.0` and references
+  `PlutoniumBuild` `0.1.0`; `build.cs`, the isolation props/targets, and
+  `build.slnx` are user-owned (see `docs/dev/architecture.md`).
+- One-line init: `init.sh` / `init.ps1` install the scaffold from a full
+  40-character commit SHA. Before writing, they reject credential-bearing
+  source URLs, require every payload file except the lock itself to be listed
+  as managed or preserve, enforce the lock/props/csproj version invariant, and
+  refuse symlinked or non-regular payloads; `init.ps1` also refuses
+  reparse-point destinations. They refuse an existing `build/` or conflicting
+  root wrappers and never touch the consumer solution. The raw URL and
+  nuget.org package are release-gated by a public repository, a release commit,
+  and NuGet trusted publishing.
+- Update flow: `build/update.sh` / `build/update.ps1` refresh managed files,
+  bump the package pin, preserve `build/build.cs` and the user-owned props and
+  solution, journal a backup under `build/temp/update/<stamp>`, and roll back
+  on a failed smoke build, removing files added by the new lock.
+- SDK bootstrap: `scaffold/build/bootstrap.sh` / `.ps1` clear host and restore
+  variables that can redirect the toolchain, require `sdk.version`,
+  `sdk.rollForward`, and `sdk.allowPrerelease` in `build/global.json`, resolve
+  the pinned SDK (`10.0.402`, `latestPatch`), and install it under
+  `build/temp`; the maintainer runner uses `.plutonium/temp`.
+
 ## Stack
 
-- TFMs: `net8.0` / `net9.0` / `net10.0` (matches Helpers today —
-  see `docs/nuke_build_helpers/dependencies-stack.md`). `net11` is an open question,
-  not included yet.
-- SDK pin: `global.json` `10.0.401` (`rollForward latestMajor`).
-- Version: `0.1.0` per `src/Directory.Build.props`.
+- Package TFM: `net10.0` only.
+- Library and test TFMs: `net8.0` / `net9.0` / `net10.0` (matches Helpers
+  today — see `docs/nuke_build_helpers/dependencies-stack.md`). `net11` is an
+  open question, not included yet.
+- SDK pin: `global.json` `10.0.402` (`latestPatch`, `allowPrerelease: false`).
+- Version: `0.1.0` per `src/Directory.Build.props`; the scaffold pins the same
+  package version in `build/build.csproj`.
 
 ## Out of scope (for 0.1.0)
 
 - Any dependency on `Nuke.Common` — PlutoniumBuild stands alone
   (see `docs/dev/packages.md`). The single third-party package,
-  `ApplicationBuilderHelpers` (`4.1.160`), lives only in `Plutonium.Shell`;
-  Core and Helpers stay dependency-free.
+  `ApplicationBuilderHelpers` (`4.1.160`), lives only in `Plutonium.Shell`
+  and in the package project; Core and Helpers stay dependency-free.
 - Verbatim copy-paste from `.inspirations/` — audited recreation only.
 - `Nuke.Components` shareable-capability interfaces — entries DSL supersedes them
   (see `docs/nuke_build/components.md`,
   `docs/nuke_build_helpers/drop-keep-signals.md`).
-- `Nuke.GlobalTool` (`nuke :setup` / `:trigger` / `:secrets` / `:update` / `:complete`,
-  scaffolding, Cake interop) — committed `build.*` scripts only at 0.1.0
-  (see `docs/nuke_build/globaltool.md`).
+- `Nuke.GlobalTool` (`nuke :setup` / `:trigger` / `:secrets` / `:update` /
+  `:complete`) and Cake interop — PlutoniumBuild ships its own `init`/`update`
+  scaffold instead (see `docs/workflows.md`).
 - Solution / SourceGen / ProjectModel (`[Solution]` injection, strongly-typed solution
   generator, MSBuild introspection) — entries use path globs instead
   (see `docs/nuke_build/solution-sourcegen.md`).
@@ -183,10 +232,13 @@ Every Helpers-facing feature (see `docs/nuke_build_helpers/index.md`):
 - `tasksync.md` agent-protocol scratch, dependabot hygiene YAMLs, placeholder unit test —
   not product (see `docs/nuke_build_helpers/drop-keep-signals.md`,
   `dependencies-stack.md`).
-- `DeleteOriginTags` full-wipe (no-args) mode — dangerous maintenance op; gate or drop
-  at implementation time, do not ship ungated.
+- `DeleteOriginTags` full-wipe (no-args) mode — dangerous maintenance op; the
+  full wipe exists only behind `PLUTONIUM_ALLOW_TAG_WIPE=true` and is not part
+  of the supported 0.1.0 workflow.
 - macOS / container / arm runner variants — absent upstream; defer until demanded.
-- Future transports / pipelines beyond GitHub + Azure — reserved per `docs/dev/packages.md`.
+- Future transports / pipelines beyond GitHub + Azure — reserved for future
+  `PlutoniumBuild.*` integration packages (see `docs/dev/packages.md`). No such
+  package ships in 0.1.0.
 
 ## Direction — adoption beyond this repository
 
@@ -196,17 +248,19 @@ use any language or toolchain — the build definition itself stays a small .NET
 project. Terminal calls are built (`PlutoniumTerminal` via `IRunContext.Terminal`,
 see `docs/terminal-calls.md`).
 
-Explicitly later, not built at 0.1.0:
+Distribution is built at 0.1.0:
 
-- Packaging / distribution (for example NuGet packages) — not built; consumers
-  reference the projects directly today.
-- One-line init / scaffold — consumers wire the entry point themselves and copy the
-  runner templates from `templates/` (see `docs/workflows.md`).
+- One MIT NuGet package, `PlutoniumBuild`, embeds Core, Helpers, and Shell for
+  `net10.0`.
+- `init.sh` / `init.ps1` install the pinned scaffold, and `build/update.*`
+  refreshes it while preserving user-owned files (see `docs/workflows.md`).
+
+Future `PlutoniumBuild.*` integration packages remain separate and unbuilt.
 
 ## Open questions
 
-- TFMs: include `net11`? Stays open — `net8/9/10` ship first; decide before build
-  based on SDK demand.
+- TFMs: include `net11`? Stays open — the libraries ship `net8/9/10` and the
+  package ships `net10` first; decide based on SDK demand.
 - API-name compat: keep upstream names (`Nuke*`, `BaseNukeBuildHelpers`,
   `nuke-cicd.yml`) vs rename to Plutonium names? Stays open — no broad renaming
   decision in this freeze. Decided in code: the pre-setup payload variable is

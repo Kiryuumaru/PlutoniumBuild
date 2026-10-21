@@ -1,23 +1,80 @@
-# Packages — PlutoniumBuild (Phase-B status)
+# Packages — PlutoniumBuild (0.1.0)
 
 > Developer documentation — for maintainers, not end users.
 >
-> Status: **Phase-B landed.** `src/Plutonium.Core/`,
+> Status: **0.1.0 distribution landed.** `src/Plutonium.Core/`,
 > `src/Plutonium.Helpers/`, and `src/Plutonium.Shell/` exist with landed
-> code: workflow emitters, pipelines (CONDITION-only live outputs plus
-> payload / `BUILD_ID` / `HAS_RELEASE`), full entries, versioning UX, and
-> the `ApplicationBuilderHelpers`-based CLI shell are built —
-> code is source of truth.
+> code. `src/PlutoniumBuild.Package/` packs them into one public package.
+> Code is source of truth.
 
-| Package | Path | Intent |
-| ------- | ---- | ------ |
-| Plutonium.Core | `src/Plutonium.Core/` (landed) | Target runner, plan-then-execute, logging + secret masking, process runner plus the terminal façade (`Process/PlutoniumTerminal.cs`, entry-facing via `IRunContext.Terminal`: arbitrary external tools, captured masked output forwarded to the run log), process result, path. Workflow emitters landed: `Workflows/Emitters/PlutoniumGitHubEmitter.cs` / `Workflows/Emitters/PlutoniumAzureEmitter.cs` (`Render` / `WriteWorkflow`, `PlutoniumHost.ExportJobOutput` output wiring). CLI ownership moved to `Plutonium.Shell`; Core carries no CLI parsing |
-| Plutonium.Helpers | `src/Plutonium.Helpers/` (landed) | Full entries (`TestEntry` / `BuildEntry` / `PublishEntry` / `WorkflowConfigEntry` definitions, discovery, extensions, runner), `AppId`, run-context shapes (`IRunContext` / `AppRunContext`). Versioning UX landed (`App/PlutoniumBuildVerbs.cs` `Version` / `Bump` / `BumpAndForget` / `StatusWatch`). Pipelines landed (`Pipelines/PlutoniumGitHubPipeline.cs` / `Pipelines/PlutoniumAzurePipeline.cs` / `Pipelines/PlutoniumLocalPipeline.cs`), including `Pipelines/PlutoniumPipelineInvocation.cs` (composes generated `shell pipeline-pre-setup` / `shell pipeline-post-setup` / `shell pipeline-entry-run` lines) and the unlisted `PipelineEntryRun` verb (runs one entry selected by `PLUTONIUM_ENTRY`). `BuildPreSetupOutputs` emits CONDITION-only plus payload / `BUILD_ID` / `HAS_RELEASE` live outputs, `FinalizePreSetupAsync` wires via `ExportJobOutput`; legacy full-matrix `BuildEntryExports` is `[Obsolete]` |
-| Plutonium.Shell | `src/Plutonium.Shell/` (landed) | CLI/app shell on `ApplicationBuilderHelpers` (`4.1.160`): 16 verbs plus kebab/legacy aliases, shared `--skip` / `--args` / `--list` / `--all`, per-invocation `PlutoniumShellState`, exit mapping `0` / `2` / `1` / `130`. Registered via `AddPlutoniumShell`. Depends on `Plutonium.Helpers` + `Plutonium.Core` |
-| Future transports / pipelines | TBD | Reserved (e.g. other CI systems) — not started |
+## What ships
 
-`Plutonium.Core` must not depend on `Nuke.Common`. `Plutonium.Helpers`
-depends only on `Plutonium.Core`. `Plutonium.Shell` depends on
-`Plutonium.Helpers` + `Plutonium.Core` plus the `ApplicationBuilderHelpers`
-`4.1.160` package; Core and Helpers stay dependency-free. See authoritative
-scope in `docs/concepts/scope.md`.
+One package: `PlutoniumBuild`, version `0.1.0` from
+`src/Directory.Build.props`. It is MIT licensed and targets `net10.0` only.
+
+| Artifact | Path | Role |
+| -------- | ---- | ---- |
+| `PlutoniumBuild` package | `src/PlutoniumBuild.Package/` | The only packable project. Package ID `PlutoniumBuild`; packs the three libraries and the package readme. |
+| `Plutonium.Core` | `src/Plutonium.Core/` | Engine: target runner, plan-then-execute, logging with secret masking, process runner plus terminal façade, path utilities, GitHub and Azure workflow emitters. `IsPackable=false`. |
+| `Plutonium.Helpers` | `src/Plutonium.Helpers/` | Author layer: entries DSL, `AppId`, run contexts, versioning UX, and GitHub / Azure / local pipelines. `IsPackable=false`. |
+| `Plutonium.Shell` | `src/Plutonium.Shell/` | CLI/app shell on `ApplicationBuilderHelpers` `4.1.160`: 16 verbs plus aliases, shared options, per-invocation state, exit mapping. `IsPackable=false`. |
+| Future `PlutoniumBuild.*` integration packages | TBD | Reserved for transports and pipelines beyond GitHub + Azure. Not built in 0.1.0. |
+
+The libraries remain multi-target (`net8.0` / `net9.0` / `net10.0`) for the
+internal test matrix. The package is `net10.0` only.
+
+## Package contents
+
+`src/PlutoniumBuild.Package/PlutoniumBuild.Package.csproj` sets
+`IncludeBuildOutput=false` and collects the library outputs into
+`lib/net10.0`:
+
+- `Plutonium.Core.dll`, `Plutonium.Core.xml`, `Plutonium.Core.pdb`
+- `Plutonium.Helpers.dll`, `Plutonium.Helpers.xml`, `Plutonium.Helpers.pdb`
+- `Plutonium.Shell.dll`, `Plutonium.Shell.xml`, `Plutonium.Shell.pdb`
+
+The package also carries `README.md`, copied from `docs/package-readme.md`.
+It carries no source files, no `PlutoniumBuild.dll`, and no separate
+`Plutonium.*` package references. `IncludeSymbols` produces a `.snupkg`;
+the publish workflow pushes the `.nupkg` with `--no-symbols`.
+
+## Dependency rule
+
+- `Plutonium.Core` is BCL-only.
+- `Plutonium.Helpers` references `Plutonium.Core` only.
+- `Plutonium.Shell` references `Plutonium.Core`, `Plutonium.Helpers`, and
+  `ApplicationBuilderHelpers` `4.1.160`.
+- The package project references all three libraries with
+  `PrivateAssets="all"` and declares `ApplicationBuilderHelpers` `4.1.160`.
+  That is the only dependency in the package manifest.
+
+Consumers add one `PackageReference`:
+
+```xml
+<PackageReference Include="PlutoniumBuild" Version="0.1.0" />
+```
+
+## Builder version
+
+`src/Directory.Build.props` sets `Version` to `0.1.0` and
+`IsPackable=false`. The package project overrides `IsPackable=true`, so the
+solution produces one distributable package.
+
+That builder version is separate from the consumer app versions. Consumer
+apps use per-app and per-environment tags such as `myapp/1.2.3`, or the
+optional `versions.json` mode. The scaffold pins the builder version in
+`build/build.csproj`; `build/update.*` moves that pin when the scaffold
+points at a newer release.
+
+## Publishing
+
+`.github/workflows/publish.yml` is manual and requires the `nuget-publish`
+environment. It packs the package, refuses to republish a version that
+already exists on nuget.org, logs in with OIDC trusted publishing, and
+pushes the package.
+
+Publishing is release-gated: the repository must be public and the release
+commit must exist before consumers can use the one-line installer or
+`dotnet add package PlutoniumBuild`.
+
+See the authoritative scope in `docs/concepts/scope.md`.

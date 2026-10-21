@@ -28,6 +28,9 @@ namespace Plutonium.Helpers.Pipelines;
 /// </summary>
 public sealed class PlutoniumGitHubPipeline : IPlutoniumPipeline
 {
+    private static readonly IReadOnlyDictionary<string, string> WritePermissions =
+        new Dictionary<string, string>(StringComparer.Ordinal) { ["contents"] = "write" };
+
     /// <inheritdoc/>
     public PlutoniumPipelineType PipelineType => PlutoniumPipelineType.GitHub;
 
@@ -113,12 +116,35 @@ public sealed class PlutoniumGitHubPipeline : IPlutoniumPipeline
     public async Task PreparePostSetupAsync(PlutoniumPipelineContext context, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(context);
+        await NormalizeRunResultsAsync(context, cancellationToken).ConfigureAwait(false);
         await PlutoniumArtifacts.UnpackArtifactsAsync(
             context.Options.TemporaryDirectory,
             context.Options.CommonOutputDirectory,
             appIds: null,
             context.Services.Logger,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Normalizes GitHub job results into the plain run-result variables consumed
+    /// by post-setup: <c>failure</c> and <c>cancelled</c> become <c>error</c>.
+    /// </summary>
+    /// <param name="context">The pipeline context. Must not be null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task for the normalization.</returns>
+    private static async Task NormalizeRunResultsAsync(PlutoniumPipelineContext context, CancellationToken cancellationToken)
+    {
+        var entries = context.Entries ?? await PlutoniumEntryDiscovery.GetAllAsync(context.Build, cancellationToken).ConfigureAwait(false);
+        context.Entries = entries;
+        foreach (var entryId in entries.RunEntries.Keys)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var raw = Environment.GetEnvironmentVariable(PlutoniumPipelineContract.HostRunResultVariableName("GITHUB", entryId)) ?? string.Empty;
+            var normalized = raw
+                .Replace("failure", "error", StringComparison.Ordinal)
+                .Replace("cancelled", "error", StringComparison.Ordinal);
+            Environment.SetEnvironmentVariable(PlutoniumPipelineContract.RunResultVariableName(entryId), normalized);
+        }
     }
 
     /// <inheritdoc/>
@@ -135,6 +161,9 @@ public sealed class PlutoniumGitHubPipeline : IPlutoniumPipeline
     /// <c>EntrySetupMap</c> entry recorded by pre-setup when present; otherwise a
     /// lightweight config-only capture is attempted with no version reconcile.
     /// Entries the capture yields nothing for fall back to the Ubuntu2204 default.
+    /// Declared secrets are job-scoped, not workflow-scoped: the pipeline token and
+    /// write permission live only on the tag/release jobs (pre-setup and post-setup),
+    /// and entry jobs receive only the secrets declared for them.
     /// </remarks>
     public async Task<PlutoniumWorkflowBuildResult> BuildWorkflowAsync(PlutoniumPipelineContext context, CancellationToken cancellationToken = default)
     {
@@ -144,18 +173,76 @@ public sealed class PlutoniumGitHubPipeline : IPlutoniumPipeline
         var name = await entries.WorkflowConfig.GetNameAsync().ConfigureAwait(false);
         var preOs = await entries.WorkflowConfig.GetPreSetupRunnerOSAsync().ConfigureAwait(false);
         var postOs = await entries.WorkflowConfig.GetPostSetupRunnerOSAsync().ConfigureAwait(false);
-        var env = PlutoniumPipelineDetection.BuildWorkflowEnv(
+        var frameworkEnv = PlutoniumPipelineDetection.BuildWorkflowEnv(
             context.Build,
             "GITHUB_TOKEN",
             "${{ secrets.GITHUB_TOKEN }}",
             secretName => "${{ secrets." + secretName.Trim() + " }}");
+        var secretEnvByEntry = BuildSecretEnvByEntry(entries, context.Build, frameworkEnv);
         var triggers = PlutoniumPipelineDetection.BuildGitHubTriggers(context.Options.EnvironmentBranches);
         var concurrency = PlutoniumPipelineDetection.BuildGitHubConcurrency();
         var setups = context.PreSetup?.EntrySetupMap
             ?? await CaptureWorkflowSetupsAsync(entries, context.Options.RepositoryRoot.Value, cancellationToken).ConfigureAwait(false);
-        var jobs = await BuildJobsAsync(entries, preOs, postOs, setups).ConfigureAwait(false);
-        var document = new PlutoniumWorkflowDocument(name, triggers, jobs, env);
-        return new PlutoniumWorkflowBuildResult(document, concurrency, "contents: write");
+        var jobs = await BuildJobsAsync(entries, preOs, postOs, setups, frameworkEnv, secretEnvByEntry).ConfigureAwait(false);
+        var document = new PlutoniumWorkflowDocument(name, triggers, jobs);
+        return new PlutoniumWorkflowBuildResult(document, concurrency, "contents: read");
+    }
+
+    /// <summary>
+    /// Builds the declared-secret environment per entry job. A secret scoped to
+    /// entry ids is attached only to those jobs; an unscoped secret stays on every
+    /// entry job to preserve build-class-wide behavior. The pipeline token is never
+    /// part of these maps.
+    /// </summary>
+    /// <param name="entries">The discovered entries. Must not be null.</param>
+    /// <param name="build">The build instance declaring secrets. Must not be null.</param>
+    /// <param name="frameworkEnv">The validated token-plus-secret map from <see cref="PlutoniumPipelineDetection.BuildWorkflowEnv"/>. Must not be null.</param>
+    /// <returns>The per-entry environment maps keyed by entry id. Never null.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when a secret is scoped to an unknown entry id.</exception>
+    private static Dictionary<string, IReadOnlyDictionary<string, string>> BuildSecretEnvByEntry(
+        PlutoniumAllEntries entries,
+        object build,
+        IReadOnlyDictionary<string, string> frameworkEnv)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentNullException.ThrowIfNull(build);
+        ArgumentNullException.ThrowIfNull(frameworkEnv);
+        var declarations = PlutoniumSecrets.GetSecretVariables(build);
+        var known = new HashSet<string>(entries.RunEntries.Keys, StringComparer.OrdinalIgnoreCase);
+        foreach (var declaration in declarations)
+        {
+            var entryIds = declaration.Secret.EntryIds
+                ?? throw new InvalidOperationException($"Secret '{declaration.Secret.SecretVariableName}' has a null entry scope.");
+            foreach (var rawEntryId in entryIds)
+            {
+                ArgumentException.ThrowIfNullOrWhiteSpace(rawEntryId);
+                var entryId = rawEntryId.Trim();
+                if (!known.Contains(entryId))
+                {
+                    throw new InvalidOperationException(
+                        $"Secret '{declaration.Secret.SecretVariableName}' is scoped to unknown entry '{entryId}'.");
+                }
+            }
+        }
+
+        var map = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal);
+        foreach (var entryId in entries.RunEntries.Keys)
+        {
+            var env = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var declaration in declarations)
+            {
+                if (!declaration.AppliesToEntry(entryId))
+                {
+                    continue;
+                }
+
+                env[declaration.EnvironmentVariableName] = frameworkEnv[declaration.EnvironmentVariableName];
+            }
+
+            map[entryId] = env;
+        }
+
+        return map;
     }
 
     private static async Task<string> FallbackBranchAsync(PlutoniumPipelineContext context, CancellationToken cancellationToken)
@@ -274,6 +361,8 @@ public sealed class PlutoniumGitHubPipeline : IPlutoniumPipeline
     /// <param name="preOs">The pre-setup RunnerOS. Must not be null.</param>
     /// <param name="postOs">The post-setup RunnerOS. Must not be null.</param>
     /// <param name="setups">The per-entry setups keyed by entry id. Must not be null; entries without a setup use the Ubuntu2204 default.</param>
+    /// <param name="frameworkEnv">The token and declared-secret environment for the tag/release jobs. Must not be null.</param>
+    /// <param name="secretEnvByEntry">The declared-secret environment keyed by entry id. Must not be null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The ordered jobs. Never null.</returns>
     private static async Task<List<PlutoniumWorkflowJob>> BuildJobsAsync(
@@ -281,18 +370,24 @@ public sealed class PlutoniumGitHubPipeline : IPlutoniumPipeline
         PlutoniumRunnerOS preOs,
         PlutoniumRunnerOS postOs,
         IReadOnlyDictionary<string, PlutoniumEntrySetup> setups,
+        IReadOnlyDictionary<string, string> frameworkEnv,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> secretEnvByEntry,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(preOs);
         ArgumentNullException.ThrowIfNull(postOs);
         ArgumentNullException.ThrowIfNull(setups);
+        ArgumentNullException.ThrowIfNull(frameworkEnv);
+        ArgumentNullException.ThrowIfNull(secretEnvByEntry);
         var checkout = PlutoniumGitHubEmitter.CheckoutStep("0", fetchTags: true, submodules: "recursive");
         var preSetup = new PlutoniumWorkflowJob(
             "PRE_SETUP",
             preOs.Name,
             [checkout, PlutoniumGitHubEmitter.RunStep("PreSetup", PlutoniumPipelineInvocation.ComposePreSetup(preOs.GetRunScript(PlutoniumPipelineType.GitHub)), stepId: "PRE_SETUP_RUN")],
-            outputs: BuildPreSetupOutputs(entries));
+            outputs: BuildPreSetupOutputs(entries),
+            env: frameworkEnv,
+            permissions: WritePermissions);
         var jobs = new List<PlutoniumWorkflowJob> { preSetup };
         var stages = await PartitionStagesAsync(entries, cancellationToken).ConfigureAwait(false);
         var priorStage = new List<string> { preSetup.Id };
@@ -323,7 +418,7 @@ public sealed class PlutoniumGitHubPipeline : IPlutoniumPipeline
 
                 var steps = new List<string>
                 {
-                    PlutoniumGitHubEmitter.CheckoutStep(fetchDepth, fetchTags: fetchTags, submodules: submodules),
+                    PlutoniumGitHubEmitter.CheckoutStep(fetchDepth, fetchTags: fetchTags, submodules: submodules, persistCredentials: false),
                     PlutoniumGitHubEmitter.RunStep(
                         entry.Id,
                         PlutoniumPipelineInvocation.ComposeEntryRun(runScript, entry.Id),
@@ -343,6 +438,11 @@ public sealed class PlutoniumGitHubPipeline : IPlutoniumPipeline
                     [PlutoniumPipelineContract.PayloadVariableName] = "${{ needs.PRE_SETUP.outputs." + PlutoniumPipelineContract.OutputName("PRE_SETUP", PlutoniumPipelineContract.PayloadVariableName) + " }}",
                     [PlutoniumPipelineContract.EntryVariableName] = entry.Id,
                 };
+                foreach (var pair in secretEnvByEntry[entry.Id])
+                {
+                    env[pair.Key] = pair.Value;
+                }
+
                 jobs.Add(new PlutoniumWorkflowJob(entry.Id, runsOn, steps, needs: needs, env: env));
                 stageIds.Add(entry.Id);
             }
@@ -366,13 +466,24 @@ public sealed class PlutoniumGitHubPipeline : IPlutoniumPipeline
         {
             [PlutoniumPipelineContract.PayloadVariableName] = "${{ needs.PRE_SETUP.outputs." + PlutoniumPipelineContract.OutputName("PRE_SETUP", PlutoniumPipelineContract.PayloadVariableName) + " }}",
         };
+        foreach (var pair in frameworkEnv)
+        {
+            payloadEnv[pair.Key] = pair.Value;
+        }
+
+        foreach (var entryId in entries.RunEntries.Keys)
+        {
+            payloadEnv[PlutoniumPipelineContract.HostRunResultVariableName("GITHUB", entryId)] = "${{ needs." + entryId + ".result }}";
+        }
+
         jobs.Add(new PlutoniumWorkflowJob(
             "POST_SETUP",
             postOs.Name,
             [checkout, PlutoniumGitHubEmitter.RunStep("PostSetup", PlutoniumPipelineInvocation.ComposePostSetup(postOs.GetRunScript(PlutoniumPipelineType.GitHub)))],
             needs: postNeeds,
-            ifCondition: "success() || failure()",
-            env: payloadEnv));
+            ifCondition: "success() || failure() || always()",
+            env: payloadEnv,
+            permissions: WritePermissions));
         return jobs;
     }
 

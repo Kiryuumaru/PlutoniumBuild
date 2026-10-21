@@ -83,7 +83,7 @@ public static class PlutoniumPreSetup
             if (useVersionFile && run.Info.TriggerType != PlutoniumTriggerType.Tag)
             {
                 PlutoniumVersionsFile.Verify(
-                    allVersions.EnvVersionGrouped, allVersions.EnvLatestVersionPaired.Count == 0 ? new Dictionary<string, PlutoniumSemVersion>(StringComparer.Ordinal) : allVersions.EnvVersionFileMap,
+                    allVersions.EnvVersionGrouped, allVersions.EnvVersionFileMap,
                     appId.Value, [run.Info.Branch]);
             }
 
@@ -134,13 +134,18 @@ public static class PlutoniumPreSetup
 
     /// <summary>
     /// Runs post-setup: unpacks shared artifacts, gathers staged release assets,
-    /// uploads them to releases with hash-append notes, and stamps version markers.
+    /// aggregates entry run results, then stamps and publishes on success or
+    /// stamps failure markers and deletes the draft on failure.
     /// </summary>
     /// <param name="context">The pipeline context. Must not be null.</param>
     /// <param name="run">The selected pipeline plus its info. Must not be null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>A task for the post-setup.</returns>
-    /// <remarks>Local runs skip git tagging but still write version marker files.</remarks>
+    /// <remarks>
+    /// Local runs skip git tagging and release publishing but still write version
+    /// marker files on success. A failure stamps <c>-failed</c> and plain tags,
+    /// deletes the draft release, then throws <c>Run has error(s).</c>.
+    /// </remarks>
     public static async Task RunPostSetupAsync(
         PlutoniumPipelineContext context,
         PlutoniumPipelineRun run,
@@ -156,6 +161,24 @@ public static class PlutoniumPreSetup
 
         await run.Pipeline.PreparePostSetupAsync(context, cancellationToken).ConfigureAwait(false);
 
+        var success = true;
+        foreach (var entryId in entries.RunEntries.Keys)
+        {
+            var result = Environment.GetEnvironmentVariable(PlutoniumPipelineContract.RunResultVariableName(entryId)) ?? string.Empty;
+            context.Services.Logger.Log(PlutoniumLogLevel.Information, $"Entry '{entryId}' result: {result}");
+            if (result.Equals("error", StringComparison.Ordinal))
+            {
+                success = false;
+            }
+        }
+
+        if (!success)
+        {
+            await StampFailedAsync(context, payload, run.PipelineType, cancellationToken).ConfigureAwait(false);
+            await run.Pipeline.FinalizePostSetupAsync(context, cancellationToken).ConfigureAwait(false);
+            throw new InvalidOperationException("Run has error(s).");
+        }
+
         var appendHashes = await entries.WorkflowConfig.GetAppendReleaseNotesAssetHashesAsync().ConfigureAwait(false);
         var staged = PlutoniumReleaseAssets.ListStagedAssets(context.Options.CommonOutputDirectory);
         var notes = await BuildAssetNotesAsync(payload, staged, appendHashes, cancellationToken).ConfigureAwait(false);
@@ -163,7 +186,8 @@ public static class PlutoniumPreSetup
         foreach (var app in payload.AppRunEntryMap.Values.Where(app => app.HasRelease))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await StampReleaseAsync(context, app, notes, run.PipelineType, cancellationToken).ConfigureAwait(false);
+            await StampPassedAsync(
+                context, app, notes, run.PipelineType, context.Options.MainEnvironmentBranch, cancellationToken).ConfigureAwait(false);
         }
 
         if (run.PipelineType != PlutoniumPipelineType.Local && payload.HasRelease)
@@ -525,15 +549,15 @@ public static class PlutoniumPreSetup
         return string.Join("\n", lines);
     }
 
-    private static async Task StampReleaseAsync(
+    private static async Task StampPassedAsync(
         PlutoniumPipelineContext context,
         PlutoniumAppRunEntry app,
         string assetNotes,
         PlutoniumPipelineType pipelineType,
+        string mainEnvironmentBranch,
         CancellationToken cancellationToken)
     {
-        var version = PlutoniumSemVersion.Parse(app.Version).WithoutMetadata();
-        var plain = PlutoniumVersionTags.VersionTag(new PlutoniumAppId(app.AppId), version);
+        var plain = PlainTag(app);
         var notes = assetNotes.Length == 0 ? app.Version : app.Version + "\n" + assetNotes;
         context.Logger.Log(PlutoniumLogLevel.Information, $"Release {plain}: {notes}");
         PlutoniumPaths.EnsureDirectory(context.Options.TemporaryDirectory);
@@ -548,8 +572,71 @@ public static class PlutoniumPreSetup
             return;
         }
 
-        await TagAsync(context, plain, cancellationToken).ConfigureAwait(false);
+        var appId = new PlutoniumAppId(app.AppId);
         await TagAsync(context, plain + PlutoniumVersionTags.PassedSuffix, cancellationToken).ConfigureAwait(false);
+        await TagAsync(context, plain, cancellationToken).ConfigureAwait(false);
+        var latest = app.Environment.Trim().Equals(mainEnvironmentBranch.Trim(), StringComparison.OrdinalIgnoreCase)
+            ? PlutoniumVersionTags.LatestTag(appId)
+            : PlutoniumVersionTags.LatestTag(appId, app.Environment);
+        await TagAsync(context, latest, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task StampFailedAsync(
+        PlutoniumPipelineContext context,
+        PlutoniumPipelinePreSetup payload,
+        PlutoniumPipelineType pipelineType,
+        CancellationToken cancellationToken)
+    {
+        if (pipelineType == PlutoniumPipelineType.Local || !payload.HasRelease)
+        {
+            return;
+        }
+
+        foreach (var app in payload.AppRunEntryMap.Values.Where(app => app.HasRelease))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var plain = PlainTag(app);
+            await TagAsync(context, plain + PlutoniumVersionTags.FailedSuffix, cancellationToken).ConfigureAwait(false);
+            await TagAsync(context, plain, cancellationToken).ConfigureAwait(false);
+        }
+
+        var buildTag = PlutoniumVersionTags.BuildTag(payload.BuildId);
+        try
+        {
+            var deleted = await context.Services.GitHubCli.DeleteReleaseAsync(
+                $"\"{buildTag}\" -y", context.Options.RepositoryRoot.Value, cancellationToken).ConfigureAwait(false);
+            if (!deleted.Succeeded)
+            {
+                context.Logger.Log(
+                    PlutoniumLogLevel.Warning,
+                    $"Draft release '{buildTag}' was not deleted: {DescribeProcessFailure(deleted)}");
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            context.Logger.Log(
+                PlutoniumLogLevel.Warning,
+                $"Draft release '{buildTag}' was not deleted: {ex.Message}");
+        }
+
+        await PushTagsAsync(context, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static string DescribeProcessFailure(PlutoniumProcessResult result)
+    {
+        var detail = result.StandardError.Trim();
+        if (detail.Length == 0)
+        {
+            detail = result.StandardOutput.Trim();
+        }
+
+        return detail.Length == 0 ? $"exit code {result.ExitCode}" : detail;
+    }
+
+    private static string PlainTag(PlutoniumAppRunEntry app)
+    {
+        var version = PlutoniumSemVersion.Parse(app.Version).WithoutMetadata();
+        return PlutoniumVersionTags.VersionTag(new PlutoniumAppId(app.AppId), version);
     }
 
     private static async Task UploadReleaseAssetsAsync(

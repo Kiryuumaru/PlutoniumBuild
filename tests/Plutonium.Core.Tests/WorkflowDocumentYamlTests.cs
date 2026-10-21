@@ -40,6 +40,25 @@ public sealed class WorkflowDocumentYamlTests
     }
 
     /// <summary>
+    /// Verifies job-level permissions render under the job, after <c>runs-on</c>.
+    /// </summary>
+    [Fact]
+    public void WriteYaml_EmitsJobPermissions()
+    {
+        var job = new PlutoniumWorkflowJob(
+            "POST_SETUP",
+            "ubuntu-22.04",
+            ["- run: echo"],
+            permissions: new Dictionary<string, string>(StringComparer.Ordinal) { ["contents"] = "write" });
+        var document = new PlutoniumWorkflowDocument("Pipe", "push:", [job]);
+
+        var yaml = document.WriteYaml();
+
+        Assert.Contains("    permissions:\n      contents: write", yaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("env:", yaml, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Verifies Azure dependency expressions stay unquoted in the outputs block.
     /// </summary>
     [Fact]

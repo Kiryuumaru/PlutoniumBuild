@@ -115,12 +115,43 @@ public sealed class PlutoniumAzurePipeline : IPlutoniumPipeline
     public async Task PreparePostSetupAsync(PlutoniumPipelineContext context, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(context);
+        await NormalizeRunResultsAsync(context, cancellationToken).ConfigureAwait(false);
         await PlutoniumArtifacts.UnpackArtifactsAsync(
             context.Options.TemporaryDirectory,
             context.Options.CommonOutputDirectory,
             appIds: null,
             context.Services.Logger,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Normalizes Azure stage results into the plain run-result variables consumed
+    /// by post-setup: <c>Succeeded</c> becomes <c>success</c>, <c>Skipped</c> becomes
+    /// <c>skipped</c>, and <c>SucceededWithIssues</c>, <c>Failed</c>, and <c>Canceled</c>
+    /// become <c>error</c>.
+    /// </summary>
+    /// <param name="context">The pipeline context. Must not be null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task for the normalization.</returns>
+    private static async Task NormalizeRunResultsAsync(PlutoniumPipelineContext context, CancellationToken cancellationToken)
+    {
+        var entries = context.Entries ?? await PlutoniumEntryDiscovery.GetAllAsync(context.Build, cancellationToken).ConfigureAwait(false);
+        context.Entries = entries;
+        foreach (var entryId in entries.RunEntries.Keys)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var raw = Environment.GetEnvironmentVariable(PlutoniumPipelineContract.HostRunResultVariableName("AZURE", entryId)) ?? string.Empty;
+            var normalized = raw switch
+            {
+                "Succeeded" => "success",
+                "SucceededWithIssues" => "error",
+                "Skipped" => "skipped",
+                "Failed" => "error",
+                "Canceled" => "error",
+                _ => raw,
+            };
+            Environment.SetEnvironmentVariable(PlutoniumPipelineContract.RunResultVariableName(entryId), normalized);
+        }
     }
 
     /// <inheritdoc/>
@@ -276,10 +307,10 @@ public sealed class PlutoniumAzurePipeline : IPlutoniumPipeline
     /// <remarks>
     /// Every entry job depends on PRE_SETUP first plus every job of the closest
     /// prior non-empty stage, so job conditions on
-    /// <c>dependencies.PRE_SETUP.outputs[...]</c> always resolve.
+    /// <c>stageDependencies.PRE_SETUP.PRE_SETUP.outputs[...]</c> always resolve.
     /// AppId-overlap-aware chaining is deferred.
-    /// Every entry and post-setup job also imports the pre-setup payload job
-    /// output as the <c>PLUTONIUM_PRE_SETUP</c> job variable.
+    /// Every entry and post-setup job also imports the pre-setup step output as
+    /// the <c>PLUTONIUM_PRE_SETUP</c> job variable.
     /// </remarks>
     /// <param name="entries">The discovered entries. Must not be null.</param>
     /// <param name="preOs">The pre-setup RunnerOS. Must not be null.</param>
@@ -331,7 +362,7 @@ public sealed class PlutoniumAzurePipeline : IPlutoniumPipeline
                     PlutoniumAzureEmitter.ScriptStep(
                         entry.Id,
                         PlutoniumPipelineInvocation.ComposeEntryRun(runScript, entry.Id),
-                        $"$[ eq(dependencies.PRE_SETUP.outputs['{PreSetupStepName}.{PlutoniumPipelineContract.ConditionOutputName(entry.Id)}'], 'true') ]"),
+                        $"$[ eq(stageDependencies.PRE_SETUP.PRE_SETUP.outputs['{PreSetupStepName}.{PlutoniumPipelineContract.ConditionOutputName(entry.Id)}'], 'true') ]"),
                 };
                 var needs = new List<string> { preSetup.Id };
                 foreach (var prior in priorStage)
@@ -344,7 +375,7 @@ public sealed class PlutoniumAzurePipeline : IPlutoniumPipeline
 
                 var env = new Dictionary<string, string>(StringComparer.Ordinal)
                 {
-                    [PlutoniumPipelineContract.PayloadVariableName] = $"$[ dependencies.PRE_SETUP.outputs['{PreSetupStepName}.{PlutoniumPipelineContract.OutputName("PRE_SETUP", PlutoniumPipelineContract.PayloadVariableName)}'] ]",
+                    [PlutoniumPipelineContract.PayloadVariableName] = $"$[ stageDependencies.PRE_SETUP.PRE_SETUP.outputs['{PreSetupStepName}.{PlutoniumPipelineContract.OutputName("PRE_SETUP", PlutoniumPipelineContract.PayloadVariableName)}'] ]",
                     [PlutoniumPipelineContract.EntryVariableName] = entry.Id,
                 };
                 jobs.Add(new PlutoniumWorkflowJob(entry.Id, runsOn, steps, needs: needs, env: env));
@@ -368,8 +399,15 @@ public sealed class PlutoniumAzurePipeline : IPlutoniumPipeline
 
         var payloadEnv = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [PlutoniumPipelineContract.PayloadVariableName] = $"$[ dependencies.PRE_SETUP.outputs['{PreSetupStepName}.{PlutoniumPipelineContract.OutputName("PRE_SETUP", PlutoniumPipelineContract.PayloadVariableName)}'] ]",
+            [PlutoniumPipelineContract.PayloadVariableName] = $"$[ stageDependencies.PRE_SETUP.PRE_SETUP.outputs['{PreSetupStepName}.{PlutoniumPipelineContract.OutputName("PRE_SETUP", PlutoniumPipelineContract.PayloadVariableName)}'] ]",
         };
+        foreach (var entryId in entries.RunEntries.Keys)
+        {
+            var stageId = StageId(entryId);
+            payloadEnv[PlutoniumPipelineContract.HostRunResultVariableName("AZURE", entryId)] =
+                "$[ stageDependencies." + stageId + "." + stageId + ".result ]";
+        }
+
         jobs.Add(new PlutoniumWorkflowJob(
             "POST_SETUP",
             postOs.Name,
@@ -378,6 +416,26 @@ public sealed class PlutoniumAzurePipeline : IPlutoniumPipeline
             ifCondition: "or(succeeded(), failed())",
             env: payloadEnv));
         return jobs;
+    }
+
+    /// <summary>
+    /// Renders an entry id as the Azure stage id the emitter generates for the
+    /// entry job: non-alphanumeric characters become underscores and the result
+    /// is uppercased.
+    /// </summary>
+    /// <param name="entryId">The entry id. Must not be null or whitespace.</param>
+    /// <returns>The Azure stage id. Never null.</returns>
+    private static string StageId(string entryId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryId);
+        var builder = new System.Text.StringBuilder(entryId.Trim().Length);
+        foreach (var ch in entryId.Trim())
+        {
+            builder.Append(char.IsLetterOrDigit(ch) ? ch : '_');
+        }
+
+        var stage = builder.ToString().Trim('_');
+        return stage.Length == 0 ? "JOB" : stage.ToUpperInvariant();
     }
 
     /// <summary>

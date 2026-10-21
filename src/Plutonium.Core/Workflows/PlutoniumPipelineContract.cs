@@ -28,6 +28,30 @@ public static class PlutoniumPipelineContract
     public const string EntryVariableName = "PLUTONIUM_ENTRY";
 
     /// <summary>
+    /// Builds the environment variable carrying one entry's normalized run result.
+    /// </summary>
+    /// <param name="entryId">The entry id. Must not be null or whitespace.</param>
+    /// <returns>The variable name (for example <c>PLUTONIUM_RUN_RESULT_MY_JOB</c>). Never null.</returns>
+    public static string RunResultVariableName(string entryId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryId);
+        return "PLUTONIUM_RUN_RESULT_" + ToUpperName(entryId);
+    }
+
+    /// <summary>
+    /// Builds the environment variable carrying one entry's raw host run result.
+    /// </summary>
+    /// <param name="host">The host suffix (for example <c>GITHUB</c>). Must not be null or whitespace.</param>
+    /// <param name="entryId">The entry id. Must not be null or whitespace.</param>
+    /// <returns>The variable name (for example <c>PLUTONIUM_RUN_RESULT_GITHUB_MY_JOB</c>). Never null.</returns>
+    public static string HostRunResultVariableName(string host, string entryId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(host);
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryId);
+        return "PLUTONIUM_RUN_RESULT_" + ToUpperName(host) + "_" + ToUpperName(entryId);
+    }
+
+    /// <summary>
     /// Encodes opaque JSON text as base64 UTF-8 for transport in an environment variable.
     /// </summary>
     /// <param name="json">Opaque JSON text. Must not be null or whitespace and must parse as JSON.</param>

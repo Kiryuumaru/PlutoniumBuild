@@ -20,22 +20,32 @@ namespace Plutonium.Core.Workflows.Emitters;
 /// </remarks>
 public static class PlutoniumGitHubEmitter
 {
+    private static readonly IReadOnlyDictionary<string, string> PinnedActions = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["actions/checkout"] = "actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0",
+        ["actions/cache"] = "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0",
+        ["actions/upload-artifact"] = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2",
+        ["actions/download-artifact"] = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0",
+    };
+
     /// <summary>
     /// Builds an opaque checkout step block.
     /// </summary>
     /// <param name="fetchDepth">Fetch depth text (for example <c>0</c>). Must not be null or whitespace.</param>
     /// <param name="fetchTags">Whether to fetch tags, rendered as <c>fetch-tags</c>.</param>
     /// <param name="submodules">Submodules mode text (for example <c>recursive</c>). Must not be null or whitespace.</param>
+    /// <param name="persistCredentials">Whether later steps may use the checkout token, rendered as <c>persist-credentials</c>.</param>
     /// <returns>Opaque step YAML. Never null.</returns>
-    public static string CheckoutStep(string fetchDepth, bool fetchTags, string submodules)
+    public static string CheckoutStep(string fetchDepth, bool fetchTags, string submodules, bool persistCredentials = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fetchDepth);
         ArgumentException.ThrowIfNullOrWhiteSpace(submodules);
-        return "- uses: actions/checkout@v4\n" +
+        return "- uses: " + PinnedActions["actions/checkout"] + "\n" +
             "  with:\n" +
             $"    fetch-depth: {PlutoniumYaml.QuoteString(fetchDepth.Trim())}\n" +
             $"    fetch-tags: {(fetchTags ? "true" : "false")}\n" +
-            $"    submodules: {PlutoniumYaml.QuoteString(submodules.Trim())}";
+            $"    submodules: {PlutoniumYaml.QuoteString(submodules.Trim())}\n" +
+            $"    persist-credentials: {(persistCredentials ? "true" : "false")}";
     }
 
     /// <summary>
@@ -56,7 +66,7 @@ public static class PlutoniumGitHubEmitter
             return restoreKey;
         }).ToList();
         var builder = new System.Text.StringBuilder();
-        builder.Append("- uses: actions/cache@v4\n  with:\n");
+        builder.Append("- uses: ").Append(PinnedActions["actions/cache"]).Append("\n  with:\n");
         builder.Append("    path: ").Append(PlutoniumYaml.QuoteString(path.Trim())).Append('\n');
         builder.Append("    key: ").Append(PlutoniumYaml.QuoteString(key.Trim()));
         if (keys.Count > 0)
@@ -122,7 +132,7 @@ public static class PlutoniumGitHubEmitter
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        return "- uses: actions/upload-artifact@v4\n" +
+        return "- uses: " + PinnedActions["actions/upload-artifact"] + "\n" +
             "  with:\n" +
             $"    name: {PlutoniumYaml.QuoteString(name.Trim())}\n" +
             $"    path: {PlutoniumYaml.QuoteString(path.Trim())}";
@@ -138,7 +148,7 @@ public static class PlutoniumGitHubEmitter
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        return "- uses: actions/download-artifact@v4\n" +
+        return "- uses: " + PinnedActions["actions/download-artifact"] + "\n" +
             "  with:\n" +
             $"    name: {PlutoniumYaml.QuoteString(name.Trim())}\n" +
             $"    path: {PlutoniumYaml.QuoteString(path.Trim())}";
@@ -188,6 +198,7 @@ public static class PlutoniumGitHubEmitter
     /// <param name="permissions">Opaque permissions block, or null to omit.</param>
     /// <param name="host">The host kind; detected via <see cref="PlutoniumHost.Detect"/> when null. Selects grouping hints only; Local fallback emits the same YAML with no host-specific markers.</param>
     /// <returns>The written workflow file path. Never null.</returns>
+    /// <exception cref="ArgumentException">Thrown when the file name resolves outside <c>.github/workflows</c>.</exception>
     public static PlutoniumPath WriteWorkflow(
         PlutoniumPath repositoryRoot,
         string fileName,
@@ -199,7 +210,14 @@ public static class PlutoniumGitHubEmitter
         ArgumentNullException.ThrowIfNull(repositoryRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
         ArgumentNullException.ThrowIfNull(document);
-        var target = repositoryRoot.Combine(".github", "workflows", fileName.Trim() + ".yml");
+        var workflowsRoot = repositoryRoot.Combine(".github", "workflows");
+        var target = workflowsRoot.Combine(fileName.Trim() + ".yml");
+        var root = System.IO.Path.GetFullPath(workflowsRoot.Value) + System.IO.Path.DirectorySeparatorChar;
+        if (!System.IO.Path.GetFullPath(target.Value).StartsWith(root, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Workflow file name must resolve under .github/workflows.", nameof(fileName));
+        }
+
         var directory = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(target.Value));
         if (!string.IsNullOrEmpty(directory))
         {

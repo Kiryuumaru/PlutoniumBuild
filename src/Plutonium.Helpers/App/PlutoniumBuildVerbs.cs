@@ -146,6 +146,8 @@ public static class PlutoniumBuildVerbs
         context.Entries = entries;
         var head = await HeadCommitAsync(context, cancellationToken).ConfigureAwait(false);
         var known = entries.AppEntryMap.Keys.ToList();
+        var useVersionFile = await entries.WorkflowConfig.GetUseJsonFileVersioningAsync().ConfigureAwait(false);
+        var rawFile = useVersionFile ? PlutoniumVersionsFile.TryReadRaw(VersionsFilePath(context)) : null;
         var splitArgs = NormalizedSplitArgs(context);
         foreach (var key in known)
         {
@@ -162,15 +164,25 @@ public static class PlutoniumBuildVerbs
                 context.Options.EnvironmentBranches,
                 context.Options.MainEnvironmentBranch,
                 head,
+                useVersionFile,
+                rawFile,
+                known,
                 workingDirectory: context.Options.RepositoryRoot.Value,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
+            if (useVersionFile)
+            {
+                PlutoniumVersionsFile.Verify(
+                    all.EnvVersionGrouped, all.EnvVersionFileMap, key, context.Options.EnvironmentBranches);
+            }
+
             PlutoniumInteractiveConsole.WriteVersionTable(context.Services.Logger, key, all);
         }
     }
 
     /// <summary>
     /// Bumps per-app versions from <c>--args</c> (or the interactive picker when
-    /// absent), tags the bumped versions, pushes tags, and optionally watches.
+    /// absent), tags the bumped versions, pushes HEAD and the bump tags, force-moves
+    /// the branch trigger tag, and optionally watches.
     /// </summary>
     /// <param name="context">The pipeline context. Must not be null.</param>
     /// <param name="watch">True to watch after bumping.</param>
@@ -181,6 +193,11 @@ public static class PlutoniumBuildVerbs
         ArgumentNullException.ThrowIfNull(context);
         var entries = context.Entries ?? await PlutoniumEntryDiscovery.GetAllAsync(context.Build, cancellationToken).ConfigureAwait(false);
         context.Entries = entries;
+        if (await entries.WorkflowConfig.GetUseJsonFileVersioningAsync().ConfigureAwait(false))
+        {
+            throw new InvalidOperationException("Bump is disabled if UseJsonFileVersioning is enabled.");
+        }
+
         var known = entries.AppEntryMap.Keys.ToList();
         var argsMap = context.SplitArgs.Count == 0
             ? await PlutoniumInteractiveConsole.PromptBumpArgsAsync(context, known, cancellationToken).ConfigureAwait(false)
@@ -188,6 +205,8 @@ public static class PlutoniumBuildVerbs
         var bumps = PlutoniumBumpArgs.ParseMap(argsMap, known);
         var branch = await context.Services.Git.GetCurrentBranchAsync(context.Options.RepositoryRoot.Value, cancellationToken).ConfigureAwait(false);
         var head = await HeadCommitAsync(context, cancellationToken).ConfigureAwait(false);
+        var environment = branch.Trim().ToLowerInvariant();
+        var tags = new List<string>();
         foreach (var pair in bumps)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -200,24 +219,58 @@ public static class PlutoniumBuildVerbs
                 head,
                 workingDirectory: context.Options.RepositoryRoot.Value,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
-            var env = branch.Trim().ToLowerInvariant();
-            var latest = all.EnvVersionGrouped.TryGetValue(env, out var grouped) && grouped.Count != 0
+            var latest = all.EnvVersionGrouped.TryGetValue(environment, out var grouped) && grouped.Count != 0
                 ? grouped[^1]
-                : new PlutoniumSemVersion(0, 0, 0, env + ".0");
+                : new PlutoniumSemVersion(0, 0, 0, environment + ".0");
+            if (all.VersionCommitPaired.TryGetValue(latest, out var latestCommit) &&
+                latestCommit.Equals(head, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Commit has already bumped {pair.Key}.");
+            }
+
             var next = PlutoniumSemVersionBumps.ApplyBumps(latest.WithoutMetadata().Clone(), pair.Value);
             var candidate = next.WithoutMetadata().ToString();
             PlutoniumVersions.ValidateBumpVersion(all, candidate, branch, context.Options.MainEnvironmentBranch);
-            await TagAndPushAsync(context, PlutoniumVersionTags.VersionTag(new PlutoniumAppId(pair.Key), PlutoniumSemVersion.Parse(candidate), PlutoniumVersionTags.BumpSuffix), cancellationToken).ConfigureAwait(false);
+            tags.Add(PlutoniumVersionTags.VersionTag(new PlutoniumAppId(pair.Key), PlutoniumSemVersion.Parse(candidate), PlutoniumVersionTags.BumpSuffix));
         }
+
+        foreach (var tag in tags)
+        {
+            await TagAsync(context, tag, force: false, cancellationToken).ConfigureAwait(false);
+        }
+
+        var headPush = await context.Services.Git.PushAsync("origin", "HEAD", context.Options.RepositoryRoot.Value, cancellationToken).ConfigureAwait(false);
+        headPush.EnsureSucceeded();
+        foreach (var tag in tags)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var pushed = await context.Services.Git.PushAsync(
+                "origin", "refs/tags/" + tag, context.Options.RepositoryRoot.Value, cancellationToken).ConfigureAwait(false);
+            pushed.EnsureSucceeded();
+        }
+
+        var bumpTag = PlutoniumVersionTags.BumpTriggerTag(branch);
+        await context.Services.Git.PushAsync(
+            "origin", ":refs/tags/" + bumpTag, context.Options.RepositoryRoot.Value, cancellationToken).ConfigureAwait(false);
+        await TagAsync(context, bumpTag, force: true, cancellationToken).ConfigureAwait(false);
+        var triggerPushed = await context.Services.Git.PushAsync(
+            "origin", "+refs/tags/" + bumpTag, context.Options.RepositoryRoot.Value, cancellationToken).ConfigureAwait(false);
+        triggerPushed.EnsureSucceeded();
 
         if (watch)
         {
-            await RunStatusWatchAsync(context, cancellationToken).ConfigureAwait(false);
+            await RunStatusWatchCoreAsync(
+                context,
+                entries,
+                branch,
+                bumps.Keys.Select(appId => (appId, environment)).ToList(),
+                cancelOnDone: true,
+                cancellationToken).ConfigureAwait(false);
         }
     }
 
     /// <summary>
-    /// Attaches to in-flight runs for the current commit, repainting the watch table until quiesced.
+    /// Attaches to in-flight runs for the current commit, repainting the watch table until canceled.
     /// </summary>
     /// <param name="context">The pipeline context. Must not be null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -225,13 +278,153 @@ public static class PlutoniumBuildVerbs
     public static async Task RunStatusWatchAsync(PlutoniumPipelineContext context, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(context);
+        var entries = context.Entries ?? await PlutoniumEntryDiscovery.GetAllAsync(context.Build, cancellationToken).ConfigureAwait(false);
+        context.Entries = entries;
         var branch = await SafeBranchAsync(context, cancellationToken).ConfigureAwait(false);
         context.Services.Logger.Log(PlutoniumLogLevel.Information, $"Watching branch '{branch}'.");
-        for (var tick = 0; tick < 3; tick++)
+        await RunStatusWatchCoreAsync(
+            context, entries, branch, [], cancelOnDone: false, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Polls reconciled tag state for every app until canceled, or until the
+    /// requested targets settle or fail when <paramref name="cancelOnDone"/> is true.
+    /// </summary>
+    /// <param name="context">The pipeline context. Must not be null.</param>
+    /// <param name="entries">The discovered entries. Must not be null.</param>
+    /// <param name="branch">The branch being watched. Must not be null or whitespace.</param>
+    /// <param name="targets">The lowercase app and environment pairs that settle the watch. Must not be null.</param>
+    /// <param name="cancelOnDone">True to stop once the targets settle or fail.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A task for the watch.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when a watched target reports a failed run.</exception>
+    private static async Task RunStatusWatchCoreAsync(
+        PlutoniumPipelineContext context,
+        PlutoniumAllEntries entries,
+        string branch,
+        IReadOnlyList<(string AppId, string Environment)> targets,
+        bool cancelOnDone,
+        CancellationToken cancellationToken)
+    {
+        var useVersionFile = await entries.WorkflowConfig.GetUseJsonFileVersioningAsync().ConfigureAwait(false);
+        var rawFile = useVersionFile ? PlutoniumVersionsFile.TryReadRaw(VersionsFilePath(context)) : null;
+        var known = entries.AppEntryMap.Keys.ToList();
+        var head = await HeadCommitAsync(context, cancellationToken).ConfigureAwait(false);
+        var tick = 0;
+        while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var allDone = true;
+            var pullFailed = false;
+            var rows = new List<(string AppId, string Environment, string Version, string Status)>();
+            var passed = new HashSet<(string AppId, string Environment)>();
+            var failed = new HashSet<(string AppId, string Environment)>();
+            foreach (var key in entries.AppEntryMap.Keys)
+            {
+                PlutoniumAllVersions all;
+                try
+                {
+                    all = await PlutoniumVersions.GetAllVersionsAsync(
+                        context.Services.Git,
+                        new PlutoniumAppId(entries.AppEntryMap[key].AppId),
+                        context.Options.RepositoryHttpsUrl,
+                        context.Options.EnvironmentBranches,
+                        context.Options.MainEnvironmentBranch,
+                        head,
+                        useVersionFile,
+                        rawFile,
+                        known,
+                        workingDirectory: context.Options.RepositoryRoot.Value,
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+                }
+                catch (InvalidOperationException)
+                {
+                    pullFailed = true;
+                    break;
+                }
+                catch (TimeoutException)
+                {
+                    pullFailed = true;
+                    break;
+                }
+
+                foreach (var environment in all.EnvSorted)
+                {
+                    if (!all.EnvVersionGrouped.TryGetValue(environment, out var grouped) || grouped.Count == 0)
+                    {
+                        allDone = false;
+                        rows.Add((key, environment, "-", "Not published"));
+                        continue;
+                    }
+
+                    var latest = grouped[^1];
+                    string status;
+                    if (all.VersionFailed.Contains(latest))
+                    {
+                        status = "Run Failed";
+                        failed.Add((key.ToLowerInvariant(), environment.ToLowerInvariant()));
+                    }
+                    else if (all.VersionPassed.Contains(latest))
+                    {
+                        status = "Published";
+                        passed.Add((key.ToLowerInvariant(), environment.ToLowerInvariant()));
+                    }
+                    else if (all.VersionQueue.Contains(latest))
+                    {
+                        status = "Publishing";
+                        allDone = false;
+                    }
+                    else if (all.VersionBump.Contains(latest))
+                    {
+                        status = "Waiting for queue";
+                        allDone = false;
+                    }
+                    else
+                    {
+                        status = "Not published";
+                        allDone = false;
+                    }
+
+                    var version = PlutoniumSemVersion.IsNullOrEmpty(latest) ? "-" : latest.WithoutMetadata().ToString();
+                    rows.Add((key, environment, version, status));
+                }
+            }
+
             PlutoniumInteractiveConsole.WriteWatchTable(context.Services.Logger, branch, tick);
-            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+            if (pullFailed)
+            {
+                context.Services.Logger.Log(PlutoniumLogLevel.Error, "Error: Connection problems");
+            }
+            else
+            {
+                foreach (var row in rows)
+                {
+                    context.Services.Logger.Log(
+                        PlutoniumLogLevel.Information,
+                        $"{row.AppId} | {row.Environment} | {row.Version} | {row.Status}");
+                }
+            }
+
+            tick++;
+            if (cancelOnDone)
+            {
+                if (targets.Count == 0 && allDone)
+                {
+                    break;
+                }
+
+                if (targets.Any(failed.Contains))
+                {
+                    throw new InvalidOperationException("Pipeline run has failed.");
+                }
+
+                if (targets.Count != 0 && targets.All(passed.Contains))
+                {
+                    break;
+                }
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -245,9 +438,41 @@ public static class PlutoniumBuildVerbs
     {
         ArgumentNullException.ThrowIfNull(context);
         context.PipelineType = PlutoniumPipelineType.GitHub;
+        await GenerateVersionsFileIfEnabledAsync(context, cancellationToken).ConfigureAwait(false);
         var built = await new PlutoniumGitHubPipeline().BuildWorkflowAsync(context, cancellationToken).ConfigureAwait(false);
-        var file = built.Document.Name.Trim().ToLowerInvariant().Replace(" ", "-", StringComparison.Ordinal);
+        var file = WorkflowFileSlug(built.Document.Name);
+        var workflowsRoot = context.Options.RepositoryRoot.Combine(".github", "workflows");
+        var target = Path.GetFullPath(Path.Combine(workflowsRoot.Value, file + ".yml"));
+        var root = Path.GetFullPath(workflowsRoot.Value) + Path.DirectorySeparatorChar;
+        if (!target.StartsWith(root, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("The workflow path must stay under .github/workflows.");
+        }
+
         return PlutoniumGitHubEmitter.WriteWorkflow(context.Options.RepositoryRoot, file, built.Document, built.FirstBlock, built.SecondBlock);
+    }
+
+    /// <summary>
+    /// Converts a workflow name to a safe file slug: trimmed, lowercased, spaces
+    /// replaced with hyphens, then restricted to letters, digits, and hyphens.
+    /// </summary>
+    /// <param name="name">The workflow name. Must not be null.</param>
+    /// <returns>The safe slug. Never null or empty.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the name cannot form a safe slug.</exception>
+    private static string WorkflowFileSlug(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        var slug = name.Trim().ToLowerInvariant().Replace(" ", "-", StringComparison.Ordinal);
+        var valid = slug.Length > 0 &&
+            ((slug[0] >= 'a' && slug[0] <= 'z') || (slug[0] >= '0' && slug[0] <= '9')) &&
+            slug.All(ch => (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-');
+        if (!valid)
+        {
+            throw new InvalidOperationException(
+                $"Workflow name '{name}' is not a safe workflow file name. Use letters, digits, and hyphens; the name is lowercased and spaces become hyphens.");
+        }
+
+        return slug;
     }
 
     /// <summary>
@@ -260,6 +485,7 @@ public static class PlutoniumBuildVerbs
     {
         ArgumentNullException.ThrowIfNull(context);
         context.PipelineType = PlutoniumPipelineType.Azure;
+        await GenerateVersionsFileIfEnabledAsync(context, cancellationToken).ConfigureAwait(false);
         var built = await new PlutoniumAzurePipeline().BuildWorkflowAsync(context, cancellationToken).ConfigureAwait(false);
         return PlutoniumAzureEmitter.WriteWorkflow(context.Options.RepositoryRoot, built.Document, built.FirstBlock, built.SecondBlock, built.ThirdBlock);
     }
@@ -502,17 +728,50 @@ public static class PlutoniumBuildVerbs
         }
     }
 
-    private static async Task TagAndPushAsync(PlutoniumPipelineContext context, string tag, CancellationToken cancellationToken)
+    private static async Task GenerateVersionsFileIfEnabledAsync(PlutoniumPipelineContext context, CancellationToken cancellationToken)
     {
+        var entries = context.Entries ?? await PlutoniumEntryDiscovery.GetAllAsync(context.Build, cancellationToken).ConfigureAwait(false);
+        context.Entries = entries;
+        if (!await entries.WorkflowConfig.GetUseJsonFileVersioningAsync().ConfigureAwait(false))
+        {
+            return;
+        }
+
+        var head = await HeadCommitAsync(context, cancellationToken).ConfigureAwait(false);
+        var known = entries.AppEntryMap.Keys.ToList();
+        var rawFile = PlutoniumVersionsFile.TryReadRaw(VersionsFilePath(context));
+        var latestByApp = new Dictionary<string, IReadOnlyDictionary<string, IReadOnlyList<PlutoniumSemVersion>>>(StringComparer.Ordinal);
+        foreach (var key in known)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var all = await PlutoniumVersions.GetAllVersionsAsync(
+                context.Services.Git,
+                new PlutoniumAppId(entries.AppEntryMap[key].AppId),
+                context.Options.RepositoryHttpsUrl,
+                context.Options.EnvironmentBranches,
+                context.Options.MainEnvironmentBranch,
+                head,
+                true,
+                rawFile,
+                known,
+                workingDirectory: context.Options.RepositoryRoot.Value,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            latestByApp[key] = all.EnvVersionGrouped;
+        }
+
+        PlutoniumVersionsFile.WriteRaw(VersionsFilePath(context), PlutoniumVersionsFile.GenerateRaw(latestByApp));
+    }
+
+    private static string VersionsFilePath(PlutoniumPipelineContext context) =>
+        context.Options.RepositoryRoot.Combine("versions.json").Value;
+
+    private static async Task TagAsync(PlutoniumPipelineContext context, string tag, bool force, CancellationToken cancellationToken)
+    {
+        var arguments = force ? $"tag -f \"{tag}\"" : $"tag \"{tag}\"";
         var tagged = await context.Services.ProcessRunner.RunAsync(
-            new PlutoniumProcessRequest("git", $"tag -f \"{tag}\"", context.Options.RepositoryRoot.Value),
+            new PlutoniumProcessRequest("git", arguments, context.Options.RepositoryRoot.Value),
             context.Services.Masker,
             cancellationToken).ConfigureAwait(false);
         tagged.EnsureSucceeded();
-        var pushed = await context.Services.ProcessRunner.RunAsync(
-            new PlutoniumProcessRequest("git", $"push origin \"{tag}\" --force", context.Options.RepositoryRoot.Value),
-            context.Services.Masker,
-            cancellationToken).ConfigureAwait(false);
-        pushed.EnsureSucceeded();
     }
 }

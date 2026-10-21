@@ -2,13 +2,13 @@
 
 Start with the [README](../README.md), then use these guides.
 
-## Getting started
+## Install and scaffold
 
-The [README](../README.md) shows what PlutoniumBuild is, why to use it, and how to describe your build and wire it to the command line.
+The [README](../README.md) shows what PlutoniumBuild is, how to install the `PlutoniumBuild` package, and how to initialize the consumer scaffold with one command. The scaffold installs `build/` plus thin root `build.sh`, `build.ps1`, and `build.cmd` wrappers; `build/update.*` refreshes it later.
 
 ## Running your build
 
-Copy the runner templates — [`build.sh`](../templates/build.sh), `build.ps1`, `build.cmd` — into your repository root so your build runs on a machine without the SDK; edit one line to point them at your build project. See [Runner scripts](workflows.md#runner-scripts).
+After the scaffold is installed, run `./build.sh Test`, `./build.sh Build`, or `./build.sh Publish`. The launcher installs the pinned SDK under `build/temp` when needed, then builds and runs `build/build.csproj`. See [Runner scripts and scaffold](workflows.md#runner-scripts-and-scaffold).
 
 ## Running any tool
 
@@ -16,7 +16,7 @@ Copy the runner templates — [`build.sh`](../templates/build.sh), `build.ps1`, 
 
 ## Secrets
 
-[Secrets](secrets.md) — declare a secret, create it in your repository or pipeline, and understand the `PLUTONIUM_<NAME>` environment key, reserved names, and masking.
+[Secrets](secrets.md) — declare a secret, scope it to entries, create it in your repository or pipeline, and understand the `PLUTONIUM_<NAME>` environment key, reserved names, and masking.
 
 ## CLI reference
 
@@ -24,7 +24,7 @@ Copy the runner templates — [`build.sh`](../templates/build.sh), `build.ps1`, 
 
 ## Versioning and releases
 
-[Versioning](versioning.md) — name your apps, check versions, and release new ones.
+[Versioning](versioning.md) — separate builder and app versions, release with tags or `versions.json`, and understand outcome stamps and watch behavior.
 
 ## Generating CI workflows
 
@@ -34,9 +34,9 @@ Copy the runner templates — [`build.sh`](../templates/build.sh), `build.ps1`, 
 
 For maintainers, not end users. Design, scope, and package internals:
 
-- [Scope (authoritative for 0.1.0)](concepts/scope.md) — what is and is not included.
-- [Packages](dev/packages.md) — what each library covers.
-- [Architecture](dev/architecture.md) — how the three libraries fit together.
+- [Scope (authoritative for 0.1.0)](concepts/scope.md) — what is and is not included, including the package and scaffold.
+- [Packages](dev/packages.md) — the single `PlutoniumBuild` package, its contents, and the dependency rule.
+- [Architecture](dev/architecture.md) — package, scaffold, and library boundaries.
 - [Recreate intent](../src/CONCEPT.md) — 1 page.
 
 `samples/` stays planned — no samples yet.

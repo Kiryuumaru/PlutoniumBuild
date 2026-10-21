@@ -38,4 +38,17 @@ public sealed record PlutoniumSecretDeclaration(MemberInfo Member, PlutoniumSecr
         string.IsNullOrWhiteSpace(Secret.EnvironmentVariableName)
             ? "PLUTONIUM_" + Secret.SecretVariableName
             : Secret.EnvironmentVariableName.Trim();
+
+    /// <summary>Gets whether the secret is declared for the given entry id, or for every entry when unscoped.</summary>
+    /// <param name="entryId">The entry id. Must not be null or whitespace.</param>
+    /// <returns>True when the secret applies to the entry.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the attribute entry scope is null.</exception>
+    public bool AppliesToEntry(string entryId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryId);
+        var entryIds = Secret.EntryIds
+            ?? throw new InvalidOperationException($"Secret '{Secret.SecretVariableName}' has a null entry scope.");
+        return entryIds.Length == 0 ||
+            entryIds.Contains(entryId.Trim(), StringComparer.OrdinalIgnoreCase);
+    }
 }

@@ -11,6 +11,8 @@ mybuild shell github-workflow          # regenerate the CI file
 
 Add `--list` to any command to preview its steps instead of running them.
 
+In a scaffolded repository, the root `build.sh` / `build.cmd` wrappers add `shell` when the first argument is a verb. `./build.sh Test` therefore runs the same command as `./build.sh shell Test`.
+
 ## Verbs
 
 Type the command exactly as shown. Some verbs accept a second spelling.
@@ -20,9 +22,9 @@ Type the command exactly as shown. Some verbs accept a second spelling.
 | (no arguments) | — | Open the interactive menu picker (the default) |
 | `shell Fetch` | — | Download the latest commits and tags |
 | `shell Version` | — | Show every app's current version |
-| `shell Bump` | — | Release a new version, then watch it finish |
-| `shell BumpAndForget` | `shell bump-and-forget` | Release without watching |
-| `shell StatusWatch` | `shell status-watch` | Watch a release that is already running |
+| `shell Bump` | — | Release a new version, then watch it finish; refused in `versions.json` mode |
+| `shell BumpAndForget` | `shell bump-and-forget` | Release without watching; refused in `versions.json` mode |
+| `shell StatusWatch` | `shell status-watch` | Watch a running release until canceled |
 | `shell Run` | — | Run everything on your machine |
 | `shell Test` | — | Run the test steps on your machine |
 | `shell Build` | — | Run the build steps on your machine |
@@ -51,6 +53,14 @@ Sources: `src/Plutonium.Shell/PlutoniumShellCommand.cs:15-29` (option definition
 
 For `Bump` and `BumpAndForget`, `--args` takes `app=expression` (for example `myapp=minor+1`) or, when your build has exactly one app, a bare expression. Bad values fail before anything runs. Source: `src/Plutonium.Shell/PlutoniumBumpArg.cs:24-53`, `src/Plutonium.Shell/PlutoniumShellState.cs:121-152`. The bump grammar is `major` / `minor` / `patch` / `prerelease` (or `pre`), with `+` to step up or `>` to set a value — see [Versioning](versioning.md).
 
+## Release flow
+
+`Bump` validates the bump, creates `<app>/<version>-bump` tags, pushes the current commit and those tags, then force-moves and force-pushes `bump-<branch>`. It watches the apps it bumped. The watch stops when they all have a `-passed` stamp and exits `1` when one has a `-failed` stamp. `BumpAndForget` does the same pushes without watching. Sources: `src/Plutonium.Helpers/App/PlutoniumBuildVerbs.cs:196-199,237-270,314-428`.
+
+`StatusWatch` attaches to the current branch and repaints tag status until you cancel. Use it after `BumpAndForget`. It does not turn a failed run into a nonzero exit; `Bump` does that. See [Watch a release](versioning.md#watch-a-release) and [Release outcomes](versioning.md#release-outcomes). Source: `src/Plutonium.Helpers/App/PlutoniumBuildVerbs.cs:278-287,351-390`.
+
+With `UseJsonFileVersioning` enabled, both bump verbs fail with `Bump is disabled if UseJsonFileVersioning is enabled.` Edit `versions.json` and commit it instead. See [JSON file mode](versioning.md#json-file-mode). Source: `src/Plutonium.Helpers/App/PlutoniumBuildVerbs.cs:196-199`.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -64,4 +74,4 @@ Sources: `src/Plutonium.Shell/PlutoniumShellCommand.cs:42,57,68` (codes `2` and 
 
 ## Tag safety
 
-`delete-origin-tags` without `--args` refuses unless `PLUTONIUM_ALLOW_TAG_WIPE=true` is set — a full wipe never happens by accident. Source: `src/Plutonium.Helpers/App/PlutoniumBuildVerbs.cs:78,401-411`.
+`delete-origin-tags` without `--args` refuses unless `PLUTONIUM_ALLOW_TAG_WIPE=true` is set — a full wipe never happens by accident. Source: `src/Plutonium.Helpers/App/PlutoniumBuildVerbs.cs:78,596-604`.

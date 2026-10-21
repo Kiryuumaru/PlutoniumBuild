@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>true</IsPackable>
+    <PackageId>PlutoniumBuild</PackageId>
+    <Title>PlutoniumBuild</Title>
+    <Authors>Kiryuumaru</Authors>
+    <Description>Build automation for any repository: declarative test, build, and publish entries, version bumping, and GitHub or Azure workflow generation from one .NET CLI.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>build;automation;ci;cli;workflow</PackageTags>
+    <RepositoryUrl>https://github.com/Kiryuumaru/PlutoniumBuild</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);CollectPlutoniumAssemblies</TargetsForTfmSpecificContentInPackage>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\docs\package-readme.md" Pack="true" PackagePath="README.md" Link="README.md" />
+    <PackageReference Include="ApplicationBuilderHelpers" Version="4.1.160" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Plutonium.Core\Plutonium.Core.csproj" PrivateAssets="all" />
+    <ProjectReference Include="..\Plutonium.Helpers\Plutonium.Helpers.csproj" PrivateAssets="all" />
+    <ProjectReference Include="..\Plutonium.Shell\Plutonium.Shell.csproj" PrivateAssets="all" />
+  </ItemGroup>
+
+  <Target Name="CollectPlutoniumAssemblies" DependsOnTargets="ResolveReferences">
+    <ItemGroup>
+      <TfmSpecificPackageFile Include="$(OutputPath)Plutonium.Core.dll;$(OutputPath)Plutonium.Core.xml;$(OutputPath)Plutonium.Core.pdb;$(OutputPath)Plutonium.Helpers.dll;$(OutputPath)Plutonium.Helpers.xml;$(OutputPath)Plutonium.Helpers.pdb;$(OutputPath)Plutonium.Shell.dll;$(OutputPath)Plutonium.Shell.xml;$(OutputPath)Plutonium.Shell.pdb">
+        <PackagePath>lib/$(TargetFramework)</PackagePath>
+      </TfmSpecificPackageFile>
+    </ItemGroup>
+  </Target>
+
+</Project>

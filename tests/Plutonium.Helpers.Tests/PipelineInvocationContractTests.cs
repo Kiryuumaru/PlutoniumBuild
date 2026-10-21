@@ -263,9 +263,23 @@ public sealed class PipelineInvocationContractTests : IDisposable
 
         var expectedExpression = azure ? "$(MY_TOKEN)" : "${{ secrets.MY_TOKEN }}";
         var tokenName = azure ? "SYSTEM_ACCESSTOKEN" : "GITHUB_TOKEN";
-        Assert.Equal(expectedExpression, result.Document.Env["PLUTONIUM_MY_TOKEN"]);
-        Assert.True(result.Document.Env.ContainsKey(tokenName));
-        Assert.DoesNotContain(result.Document.Env.Keys, key => key.StartsWith("NUKE_", StringComparison.Ordinal));
+        if (azure)
+        {
+            Assert.Equal(expectedExpression, result.Document.Env["PLUTONIUM_MY_TOKEN"]);
+            Assert.True(result.Document.Env.ContainsKey(tokenName));
+            Assert.DoesNotContain(result.Document.Env.Keys, key => key.StartsWith("NUKE_", StringComparison.Ordinal));
+        }
+        else
+        {
+            Assert.Empty(result.Document.Env);
+            var preSetup = result.Document.Jobs.Single(job => job.Id == "PRE_SETUP");
+            Assert.Equal(expectedExpression, preSetup.Env["PLUTONIUM_MY_TOKEN"]);
+            Assert.Equal("${{ secrets.GITHUB_TOKEN }}", preSetup.Env[tokenName]);
+            var entry = result.Document.Jobs.Single(job => job.Id == "my-job");
+            Assert.Equal(expectedExpression, entry.Env["PLUTONIUM_MY_TOKEN"]);
+            Assert.False(entry.Env.ContainsKey(tokenName));
+        }
+
         var yaml = result.Document.WriteYaml();
         Assert.Contains("PLUTONIUM_MY_TOKEN", yaml, StringComparison.Ordinal);
         Assert.DoesNotContain("NUKE_MY_TOKEN", yaml, StringComparison.Ordinal);
@@ -348,9 +362,13 @@ public sealed class PipelineInvocationContractTests : IDisposable
 
         var result = await new PlutoniumGitHubPipeline().BuildWorkflowAsync(context);
 
-        Assert.Equal("${{ secrets.LOWER_TOKEN }}", result.Document.Env["plutonium_lower_token"]);
-        Assert.Contains("plutonium_lower_token", result.Document.Env.Keys);
-        Assert.DoesNotContain("PLUTONIUM_LOWER_TOKEN", result.Document.Env.Keys);
+        Assert.Empty(result.Document.Env);
+        var preSetup = result.Document.Jobs.Single(job => job.Id == "PRE_SETUP");
+        Assert.Equal("${{ secrets.LOWER_TOKEN }}", preSetup.Env["plutonium_lower_token"]);
+        Assert.Contains("plutonium_lower_token", preSetup.Env.Keys);
+        Assert.DoesNotContain("PLUTONIUM_LOWER_TOKEN", preSetup.Env.Keys);
+        var entry = result.Document.Jobs.Single(job => job.Id == "my-job");
+        Assert.Equal("${{ secrets.LOWER_TOKEN }}", entry.Env["plutonium_lower_token"]);
         var yaml = result.Document.WriteYaml();
         Assert.Contains("plutonium_lower_token", yaml, StringComparison.Ordinal);
         Assert.DoesNotContain("PLUTONIUM_LOWER_TOKEN", yaml, StringComparison.Ordinal);

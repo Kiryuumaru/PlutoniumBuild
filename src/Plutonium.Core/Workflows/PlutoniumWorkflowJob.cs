@@ -37,6 +37,9 @@ public sealed class PlutoniumWorkflowJob
     /// <summary>Gets the job outputs (name to value expression). Never null.</summary>
     public IReadOnlyDictionary<string, string> Outputs { get; }
 
+    /// <summary>Gets the job-level permissions (scope to access). Never null; empty for host defaults.</summary>
+    public IReadOnlyDictionary<string, string> Permissions { get; }
+
     /// <summary>
     /// Initializes a new instance of the <see cref="PlutoniumWorkflowJob"/> class.
     /// </summary>
@@ -47,6 +50,7 @@ public sealed class PlutoniumWorkflowJob
     /// <param name="ifCondition">The condition expression, or null for unconditional.</param>
     /// <param name="env">Job-level environment variables. Must not be null; keys and values must not be null.</param>
     /// <param name="outputs">Job outputs. Must not be null; keys and values must not be null.</param>
+    /// <param name="permissions">Job-level permissions. Must not be null; keys and values must not be null.</param>
     public PlutoniumWorkflowJob(
         string id,
         string runsOn,
@@ -54,7 +58,8 @@ public sealed class PlutoniumWorkflowJob
         IEnumerable<string>? needs = null,
         string? ifCondition = null,
         IReadOnlyDictionary<string, string>? env = null,
-        IReadOnlyDictionary<string, string>? outputs = null)
+        IReadOnlyDictionary<string, string>? outputs = null,
+        IReadOnlyDictionary<string, string>? permissions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentException.ThrowIfNullOrWhiteSpace(runsOn);
@@ -114,6 +119,23 @@ public sealed class PlutoniumWorkflowJob
             }
 
             Outputs = materialized;
+        }
+
+        if (permissions is null)
+        {
+            Permissions = new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+        else
+        {
+            var materialized = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var pair in permissions)
+            {
+                ArgumentNullException.ThrowIfNull(pair.Key, nameof(permissions));
+                ArgumentNullException.ThrowIfNull(pair.Value, nameof(permissions));
+                materialized.Add(pair.Key, pair.Value);
+            }
+
+            Permissions = materialized;
         }
     }
 }

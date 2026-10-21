@@ -45,4 +45,10 @@ public sealed class PlutoniumSecretVariableAttribute : Attribute
 
     /// <summary>Gets the environment variable override, if any.</summary>
     public string? EnvironmentVariableName { get; }
+
+    /// <summary>
+    /// Gets or sets the entry ids that receive this secret in generated entry jobs.
+    /// Empty means every entry job; the pipeline jobs always receive declared secrets.
+    /// </summary>
+    public string[] EntryIds { get; set; } = Array.Empty<string>();
 }

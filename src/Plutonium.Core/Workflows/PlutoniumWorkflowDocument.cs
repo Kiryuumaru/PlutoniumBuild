@@ -110,6 +110,15 @@ public sealed class PlutoniumWorkflowDocument
         {
             builder.Append("  ").Append(PlutoniumYaml.QuoteString(job.Id)).Append(":\n");
             builder.Append("    runs-on: ").Append(PlutoniumYaml.QuoteString(job.RunsOn)).Append('\n');
+            if (job.Permissions.Count > 0)
+            {
+                builder.Append("    permissions:\n");
+                foreach (var pair in job.Permissions)
+                {
+                    builder.Append("      ").Append(PlutoniumYaml.QuoteString(pair.Key)).Append(": ").Append(PlutoniumYaml.QuoteString(pair.Value)).Append('\n');
+                }
+            }
+
             if (job.Needs.Count > 0)
             {
                 builder.Append("    needs: [");
