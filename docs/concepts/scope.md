@@ -176,9 +176,11 @@ Every Helpers-facing feature (see `docs/nuke_build_helpers/index.md`):
   as managed or preserve, enforce the lock/props/csproj version invariant, and
   refuse symlinked or non-regular payloads; `init.ps1` also refuses
   reparse-point destinations. They refuse an existing `build/` or conflicting
-  root wrappers and never touch the consumer solution. The raw URL and
-  nuget.org package are release-gated by a public repository, a release commit,
-  and NuGet trusted publishing.
+  root wrappers and never touch the consumer solution. The raw installer URL
+  is release-gated by a public repository and a release commit. The nuget.org
+  package is published separately by the manual `publish.yml` workflow with a
+  step-scoped `NUGET_AUTH_TOKEN`; that workflow does not require a public
+  repository.
 - Update flow: `build/update.sh` / `build/update.ps1` refresh managed files,
   bump the package pin, preserve `build/build.cs` and the user-owned props and
   solution, journal a backup under `build/temp/update/<stamp>`, and roll back

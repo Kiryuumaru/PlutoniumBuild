@@ -68,13 +68,19 @@ points at a newer release.
 
 ## Publishing
 
-`.github/workflows/publish.yml` is manual and requires the `nuget-publish`
-environment. It packs the package, refuses to republish a version that
-already exists on nuget.org, logs in with OIDC trusted publishing, and
-pushes the package.
+`.github/workflows/publish.yml` is manual. Dispatch it with `confirm` set to
+true from `main`; the job is skipped otherwise and on any other ref. It checks
+out `refs/heads/main`, re-verifies the scaffold lock, runs the full build and
+tests, packs the package, refuses to republish a version that already exists on
+nuget.org, and pushes with the `NUGET_AUTH_TOKEN` repository secret scoped to
+the push step. A fixed `publish-nuget` concurrency group serializes runs and
+protects an in-progress run from cancellation, though a newer queued run can
+still cancel an older pending run. The workflow uses no OIDC, no deployment
+environment, and no GitHub Packages, tag, or release steps.
 
-Publishing is release-gated: the repository must be public and the release
-commit must exist before consumers can use the one-line installer or
-`dotnet add package PlutoniumBuild`.
+Publishing is release-gated: the 0.1.0 package must be pushed to nuget.org
+before `dotnet add package PlutoniumBuild` resolves. The raw installer has a
+separate gate: the repository must be public and the release commit must exist.
+Publishing does not require a public repository.
 
 See the authoritative scope in `docs/concepts/scope.md`.

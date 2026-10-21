@@ -10,7 +10,8 @@
 > run-result gating, and `StatusWatch`. Workflow security and scaffold
 > hardening are landed and tested: GitHub read-only defaults and job-scoped
 > secrets, pinned actions, Azure stage-result gating, lock/version invariants,
-> reparse refusal, update rollback, and PowerShell smoke on Windows CI.
+> reparse refusal, update rollback, and PowerShell smoke on Ubuntu (skip
+> build) and Windows CI.
 > Pins: `global.json` SDK `10.0.402` (`latestPatch`, `allowPrerelease: false`)
 > / `src/Directory.Build.props` version `0.1.0`. The package targets `net10.0`;
 > the three libraries stay `net8.0` / `net9.0` / `net10.0` for tests and are
@@ -49,7 +50,7 @@ and state it.
 │   └── PlutoniumBuild.Package/ # LANDED — the single packable net10.0 NuGet package
 ├── tests/                  # LANDED — Core / Helpers / Shell / Packaging / Scaffold / Sdk
 ├── samples/                # PLANNED
-├── .github/workflows/      # ci.yml + publish.yml (manual, OIDC trusted publishing)
+├── .github/workflows/      # ci.yml + publish.yml (manual, main-only API-key publish)
 ├── docs/
 │   ├── index.md            # user docs hub (install/CLI/versioning/workflows)
 │   ├── cli.md              # CLI reference (verbs, options, exit codes)
@@ -60,6 +61,7 @@ and state it.
 │   ├── secrets.md          # how-to: declare/scope secrets, env keys, CI exposure
 │   ├── package-readme.md   # packed as the NuGet package README
 │   ├── dev/                # developer docs (packages.md, architecture.md)
+│   ├── adr/                # architecture decision records
 │   ├── agents/             # workflow config (issue-tracker, triage-labels, domain)
 │   └── concepts/
 │       └── scope.md        # AUTHORITATIVE in/out scope for 0.1.0
@@ -108,11 +110,15 @@ and state it.
   `bash scaffold/smoke/preserve-drift.sh`, and
   `bash scaffold/smoke/update-rollback.sh` — scaffold safety smokes.
   `pwsh scaffold/smoke/powershell-smoke.ps1` exercises the PowerShell
-  installer, updater, and build flow; CI runs the full flow on Windows.
-- `.github/workflows/publish.yml` — manual nuget.org publish with OIDC
-  trusted publishing. Requires a public repository, a release commit, the
-  `nuget-publish` environment, and a version not already published.
-  Release-gated; never run it as part of docs work.
+  installer, updater, and build flow; CI runs it on Ubuntu with `-SkipBuild`
+  and runs the full flow on Windows.
+- `.github/workflows/publish.yml` — manual nuget.org publish from `main`.
+  Dispatch it with `confirm` set to true; the job is skipped otherwise and
+  on any ref other than `refs/heads/main`. It packs the package, refuses a
+  version that already exists on nuget.org, and pushes with the
+  `NUGET_AUTH_TOKEN` repository secret scoped to the push step. It needs no
+  public repository and no deployment environment. Release-gated; never run
+  it as part of docs work.
 
 Docs tooling: none yet. Record verification as `Not run (docs-only)` unless
 project docs tooling is added.
@@ -126,6 +132,10 @@ Applies to landed code; state as gate, not current status:
 - Packaging tests assert one distributable package, `net10.0` only, MIT,
   the packed readme, and `ApplicationBuilderHelpers` `4.1.160` as the only
   dependency.
+- Repository workflow policy tests assert the CI check names and triggers,
+  the computed matrix, the Post Setup result gate, and the manual main-only
+  publish confirmation, version-exists guard, and step-scoped
+  `NUGET_AUTH_TOKEN` push.
 - Workflow security tests assert read-only default permissions, no
   workflow-level secret environment, write permission and the token
   environment only on pre/post setup, entry secret scoping and unknown-id

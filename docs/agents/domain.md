@@ -38,7 +38,9 @@ Multi-context repo (presence of `CONTEXT-MAP.md` at the root):
         └── docs/adr/
 ```
 
-This repo uses the single-context layout above. `CONTEXT.md` and `docs/adr/` do not exist yet and are created lazily by domain work, not pre-created here.
+This repo uses the single-context layout above. `CONTEXT.md` does not exist yet;
+it is created lazily by domain work, not pre-created here. `docs/adr/` records
+decisions as they land, starting with `0001-nuget-api-key-publishing.md`.
 
 Product scope stays authoritative in `docs/concepts/scope.md`; these domain files record workflow glossary and decisions separately.
 
