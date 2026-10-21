@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Plutonium.Packaging.Tests</RootNamespace>
     <AssemblyName>Plutonium.Packaging.Tests</AssemblyName>
-    <Description>Packaging and offline-consumer tests for the PlutoniumBuild NuGet package. Not packed.</Description>
+    <Description>Packaging, offline-consumer, and repository workflow policy tests for the PlutoniumBuild distribution. Not packed.</Description>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
@@ -22,6 +22,9 @@
     </PackageReference>
     <PackageReference Include="coverlet.collector" Version="10.0.1">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="YamlDotNet" Version="18.1.0">
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
   </ItemGroup>

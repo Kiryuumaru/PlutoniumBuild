@@ -12,19 +12,22 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: publish-nuget
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: Publish to nuget.org
-    if: inputs.confirm == true
+    if: inputs.confirm == true && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: nuget-publish
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - name: Check out
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
 
       - name: Verify scaffold lock
         shell: bash
@@ -89,20 +92,18 @@ jobs:
               ;;
           esac
 
-      - name: NuGet login (OIDC trusted publishing)
-        id: nuget-login
-        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841
-        with:
-          user: ${{ secrets.NUGET_USER }}
-
       - name: Push
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+          NUGET_AUTH_TOKEN: ${{ secrets.NUGET_AUTH_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -z "${NUGET_AUTH_TOKEN:-}" ]; then
+            echo "::error::NUGET_AUTH_TOKEN is not configured."
+            exit 1
+          fi
           "$DOTNET_EXE" nuget push "artifacts/PlutoniumBuild.${VERSION}.nupkg" \
-            --api-key "$NUGET_API_KEY" \
+            --api-key "$NUGET_AUTH_TOKEN" \
             --source https://api.nuget.org/v3/index.json \
             --no-symbols

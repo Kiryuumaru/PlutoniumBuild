@@ -14,13 +14,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lock:
-    name: Scaffold lock
+  pre-setup:
+    name: Pre Setup
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Check out
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - name: Verify scaffold lock
         shell: bash
         run: bash scaffold/lock.sh verify
@@ -50,49 +54,78 @@ jobs:
           }
           if ($failures -gt 0) { exit 1 }
           Write-Host "Parsed $($files.Count) PowerShell files."
+      - name: Compute matrix
+        id: matrix
+        shell: bash
+        run: |
+          matrix='{"include":[{"os":"ubuntu-latest","build_command":"./build.sh","build_shell":"bash","smoke_shell":"pwsh","smoke_script":"./scaffold/smoke/powershell-smoke.ps1 -SkipBuild"},{"os":"windows-latest","build_command":".\\build.cmd","build_shell":"cmd","smoke_shell":"powershell","smoke_script":"./scaffold/smoke/powershell-smoke.ps1"}]}'
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   scaffold-smoke:
     name: Scaffold smoke (${{ matrix.os }})
+    needs: pre-setup
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            shell: pwsh
-            script: ./scaffold/smoke/powershell-smoke.ps1 -SkipBuild
-          - os: windows-latest
-            shell: powershell
-            script: ./scaffold/smoke/powershell-smoke.ps1
+      matrix: ${{ fromJSON(needs.pre-setup.outputs.matrix) }}
     steps:
       - name: Check out
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - name: Run PowerShell scaffold smoke
-        shell: ${{ matrix.shell }}
-        run: ${{ matrix.script }}
+        shell: ${{ matrix.smoke_shell }}
+        run: ${{ matrix.smoke_script }}
 
   test:
     name: Build and test (${{ matrix.os }})
+    needs: pre-setup
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            command: ./build.sh
-            shell: bash
-          - os: windows-latest
-            command: .\build.cmd
-            shell: cmd
+      matrix: ${{ fromJSON(needs.pre-setup.outputs.matrix) }}
     steps:
       - name: Check out
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Verify scaffold lock
-        if: runner.os == 'Linux'
-        shell: bash
-        run: bash scaffold/lock.sh verify
+        with:
+          persist-credentials: false
       - name: Build and test
-        shell: ${{ matrix.shell }}
-        run: ${{ matrix.command }}
+        shell: ${{ matrix.build_shell }}
+        run: ${{ matrix.build_command }}
+
+  post-setup:
+    name: Post Setup
+    needs:
+      - pre-setup
+      - scaffold-smoke
+      - test
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify required job results
+        shell: bash
+        env:
+          PRE_SETUP_RESULT: ${{ needs.pre-setup.result }}
+          SCAFFOLD_SMOKE_RESULT: ${{ needs.scaffold-smoke.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for entry in \
+            "pre-setup:$PRE_SETUP_RESULT" \
+            "scaffold-smoke:$SCAFFOLD_SMOKE_RESULT" \
+            "test:$TEST_RESULT"; do
+            job=${entry%%:*}
+            result=${entry#*:}
+            if [ "$result" != "success" ]; then
+              echo "::error::Required job '$job' finished with '$result'."
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+          echo "All required jobs succeeded."
