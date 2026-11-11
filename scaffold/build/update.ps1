@@ -70,6 +70,33 @@ function Test-SafeManifestPath {
     return $true
 }
 
+function ConvertTo-LfLineEndings {
+    param([string]$Path)
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $changed = $false
+    $normalized = New-Object System.Collections.Generic.List[byte]
+    foreach ($value in $bytes) {
+        if ($value -eq 13) {
+            $changed = $true
+            continue
+        }
+        $normalized.Add($value)
+    }
+    if ($changed) {
+        [System.IO.File]::WriteAllBytes($Path, $normalized.ToArray())
+    }
+}
+
+function Write-LfLines {
+    param([string]$Path, [System.Collections.Generic.IEnumerable[string]]$Lines)
+    $text = [string]::Join("`n", [string[]]$Lines)
+    if ($text.Length -gt 0) {
+        $text += "`n"
+    }
+    $encoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
+    [System.IO.File]::WriteAllText($Path, $text, $encoding)
+}
+
 function Get-InstalledPath {
     param([string]$Relative)
     if ($Relative.StartsWith("build/", [System.StringComparison]::Ordinal)) {
@@ -220,7 +247,7 @@ function Set-ManagedHash {
     if (-not $found) {
         throw "build/update.ps1: lock has no managed entry for $Relative."
     }
-    [System.IO.File]::WriteAllLines($LockPath, $rewritten)
+    Write-LfLines -Path $LockPath -Lines $rewritten
 }
 
 if ($Sha -notmatch "^[0-9a-fA-F]{40}$") {
@@ -304,6 +331,11 @@ try {
     New-Item -ItemType Directory -Path $fetchDirectory -Force | Out-Null
     & git -C $fetchDirectory init -q
     if ($LASTEXITCODE -ne 0) { Stop-Update "build/update.ps1: git init failed." }
+    # Git for Windows defaults to core.autocrlf=true; the lock records LF hashes.
+    & git -C $fetchDirectory config core.autocrlf false
+    if ($LASTEXITCODE -ne 0) { Stop-Update "build/update.ps1: git config failed." }
+    & git -C $fetchDirectory config core.eol lf
+    if ($LASTEXITCODE -ne 0) { Stop-Update "build/update.ps1: git config failed." }
     & git -C $fetchDirectory remote add origin $Source
     if ($LASTEXITCODE -ne 0) { Stop-Update "build/update.ps1: git remote add failed." }
 
@@ -331,6 +363,10 @@ try {
         if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
             Stop-Update "build/update.ps1: scaffold payload contains a symbolic link; refusing to install it."
         }
+    }
+
+    foreach ($item in Get-ChildItem -LiteralPath (Join-Path $fetchDirectory "scaffold") -Recurse -File -Force) {
+        ConvertTo-LfLineEndings -Path $item.FullName
     }
 
     Assert-VersionInvariant -Root $fetchDirectory -LockPath $sourceLock
@@ -484,7 +520,7 @@ try {
             $rewritten.Add($line)
         }
     }
-    [System.IO.File]::WriteAllLines($stagedLock, $rewritten)
+    Write-LfLines -Path $stagedLock -Lines $rewritten
 
     foreach ($line in [System.IO.File]::ReadAllLines($sourceLock)) {
         if ($line -notmatch "^\s*preserve\s+(\S+)\s*$") { continue }
@@ -525,6 +561,7 @@ try {
             $versionElement.InnerText = $newPackageVersion
         }
         $projectXml.Save($stagedProject)
+        ConvertTo-LfLineEndings -Path $stagedProject
         $projectHash = (Get-FileHash -LiteralPath $stagedProject -Algorithm SHA256).Hash.ToLowerInvariant()
         Set-ManagedHash -LockPath $stagedLock -Relative "build/build.csproj" -Hash $projectHash
     }

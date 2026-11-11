@@ -4,3 +4,9 @@
 # core.autocrlf=true would otherwise break their bash legs.
 *.sh text eol=lf
 *.cmd text eol=lf
+*.ps1 text eol=lf
+
+# The scaffold payload and lock are hashed byte-for-byte, so a Windows
+# autocrlf checkout must still produce the LF bytes the lock records.
+scaffold/build/** text eol=lf
+scaffold/root/** text eol=lf

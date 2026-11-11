@@ -116,9 +116,40 @@ source_path() {
     esac
 }
 
+reject_unsafe_source_paths() {
+    local root="$1" file relative
+    while IFS= read -r -d '' file; do
+        relative=${file#"$root/"}
+        case "$relative" in
+            *[[:cntrl:]]*)
+                printf 'init.sh: source scaffold contains a path with control characters: %q; refusing to install it.\n' "$relative" >&2
+                return 1
+                ;;
+        esac
+    done < <(find "$root" -print0)
+    return 0
+}
+
+normalize_line_endings() {
+    local root="$1" file temporary
+    while IFS= read -r -d '' file; do
+        grep -q $'\r' "$file" || continue
+        temporary=$(mktemp "$(dirname "$file")/.plutonium-lf.XXXXXXXX") || return 1
+        if ! cp -p "$file" "$temporary" || ! tr -d '\r' < "$file" > "$temporary"; then
+            rm -f -- "$temporary"
+            return 1
+        fi
+        if ! mv "$temporary" "$file"; then
+            rm -f -- "$temporary"
+            return 1
+        fi
+    done < <(find "$root" -type f -print0)
+}
+
 is_safe_manifest_path() {
     local relative="$1"
     case "$relative" in
+        *[[:cntrl:]]*) return 1 ;;
         build.sh|build.ps1|build.cmd) return 0 ;;
         build/*) ;;
         *) return 1 ;;
@@ -140,6 +171,7 @@ lock_get() {
         /^[[:space:]]*#/ { next }
         {
             line = $0
+            sub(/\r$/, "", line)
             sub(/^[[:space:]]+/, "", line)
             prefix = key "="
             if (index(line, prefix) == 1) {
@@ -155,6 +187,7 @@ lock_get() {
 lock_has_path() {
     local file="$1" relative="$2"
     awk -v path="$relative" '
+        { sub(/\r$/, "") }
         ($1 == "managed" || $1 == "preserve") && $2 == path { found = 1; exit }
         END { exit(found ? 0 : 1) }
     ' "$file"
@@ -206,7 +239,7 @@ require_version_invariant() {
 
 check_source_contract() {
     local root="$1" lock="$2" failures=0 file relative line source
-    while IFS= read -r file; do
+    while IFS= read -r -d '' file; do
         relative=${file#"$root/"}
         case "$relative" in
             scaffold/build/plutonium.lock) continue ;;
@@ -218,10 +251,11 @@ check_source_contract() {
             echo "init.sh: source scaffold contains an unlisted file: $relative" >&2
             failures=$((failures + 1))
         fi
-    done < <(find "$root/scaffold/build" -type f
-        find "$root/scaffold/root" -type f)
+    done < <(find "$root/scaffold/build" -type f -print0
+        find "$root/scaffold/root" -type f -print0)
 
     while IFS= read -r line; do
+        line=${line%$'\r'}
         case "$line" in
             preserve\ *) ;;
             *) continue ;;
@@ -255,6 +289,9 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 git init -q "$FETCH_DIR"
+# Git for Windows defaults to core.autocrlf=true; the lock records LF hashes.
+git -C "$FETCH_DIR" config core.autocrlf false
+git -C "$FETCH_DIR" config core.eol lf
 git -C "$FETCH_DIR" remote add origin "$SOURCE"
 if ! GIT_TERMINAL_PROMPT=0 git -C "$FETCH_DIR" fetch --depth 1 --no-tags origin "$SHA" >/dev/null 2>&1; then
     echo "init.sh: could not fetch commit $SHA from $SOURCE." >&2
@@ -283,6 +320,8 @@ if find "$FETCH_DIR/scaffold" ! -type f ! -type d -print -quit | grep -q .; then
     echo "init.sh: scaffold payload contains a non-regular file; refusing to install it." >&2
     exit 1
 fi
+reject_unsafe_source_paths "$FETCH_DIR/scaffold" || exit 1
+normalize_line_endings "$FETCH_DIR/scaffold"
 if [ "$(lock_get "$SOURCE_LOCK" format)" != "1" ]; then
     echo "init.sh: source lock has an unsupported format." >&2
     exit 1
@@ -291,6 +330,7 @@ require_version_invariant "$FETCH_DIR" "$SOURCE_LOCK" || exit 1
 check_source_contract "$FETCH_DIR" "$SOURCE_LOCK" || exit 1
 
 while IFS= read -r line; do
+    line=${line%$'\r'}
     case "$line" in
         managed\ *) ;;
         *) continue ;;
@@ -340,6 +380,7 @@ STAGE=$(mktemp -d "$TARGET/.plutonium-init.XXXXXXXX") || {
 chmod 700 "$STAGE"
 mkdir -p "$STAGE/build"
 while IFS= read -r line; do
+    line=${line%$'\r'}
     case "$line" in
         managed\ *|preserve\ *) ;;
         *) continue ;;
@@ -356,14 +397,14 @@ while IFS= read -r line; do
 done < "$SOURCE_LOCK"
 cp -p "$SOURCE_LOCK" "$STAGE/build/plutonium.lock"
 
-while IFS= read -r staged; do
+while IFS= read -r -d '' staged; do
     relative=${staged#"$STAGE/"}
     [ "$relative" = "build/plutonium.lock" ] && continue
     if ! lock_has_path "$SOURCE_LOCK" "$relative"; then
         echo "init.sh: staged file is not listed by the source lock: $relative" >&2
         exit 1
     fi
-done < <(find "$STAGE" -type f)
+done < <(find "$STAGE" -type f -print0)
 
 manifest_source="$SOURCE"
 if [ "$SOURCE" = "$DEFAULT_SOURCE" ]; then

@@ -85,6 +85,33 @@ function Test-SafeManifestPath {
     return $true
 }
 
+function ConvertTo-LfLineEndings {
+    param([string]$Path)
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $changed = $false
+    $normalized = New-Object System.Collections.Generic.List[byte]
+    foreach ($value in $bytes) {
+        if ($value -eq 13) {
+            $changed = $true
+            continue
+        }
+        $normalized.Add($value)
+    }
+    if ($changed) {
+        [System.IO.File]::WriteAllBytes($Path, $normalized.ToArray())
+    }
+}
+
+function Write-LfLines {
+    param([string]$Path, [System.Collections.Generic.IEnumerable[string]]$Lines)
+    $text = [string]::Join("`n", [string[]]$Lines)
+    if ($text.Length -gt 0) {
+        $text += "`n"
+    }
+    $encoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
+    [System.IO.File]::WriteAllText($Path, $text, $encoding)
+}
+
 function Get-LockValue {
     param([string]$Path, [string]$Key)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -227,6 +254,11 @@ New-Item -ItemType Directory -Path $fetchDirectory -Force | Out-Null
 try {
     & git -C $fetchDirectory init -q
     if ($LASTEXITCODE -ne 0) { Stop-Init "init.ps1: git init failed." }
+    # Git for Windows defaults to core.autocrlf=true; the lock records LF hashes.
+    & git -C $fetchDirectory config core.autocrlf false
+    if ($LASTEXITCODE -ne 0) { Stop-Init "init.ps1: git config failed." }
+    & git -C $fetchDirectory config core.eol lf
+    if ($LASTEXITCODE -ne 0) { Stop-Init "init.ps1: git config failed." }
     & git -C $fetchDirectory remote add origin $Source
     if ($LASTEXITCODE -ne 0) { Stop-Init "init.ps1: git remote add failed." }
 
@@ -257,6 +289,10 @@ try {
         if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
             Stop-Init "init.ps1: scaffold payload contains a symbolic link; refusing to install it."
         }
+    }
+
+    foreach ($item in Get-ChildItem -LiteralPath (Join-Path $fetchDirectory "scaffold") -Recurse -File -Force) {
+        ConvertTo-LfLineEndings -Path $item.FullName
     }
 
     Assert-VersionInvariant -Root $fetchDirectory -LockPath $sourceLock
@@ -344,7 +380,7 @@ try {
     if (-not $wroteSource) { $rewritten.Add("source=$manifestSource") }
     if (-not $wroteSourceUrl) { $rewritten.Add("source_url=$Source") }
     if (-not $wroteCommit) { $rewritten.Add("scaffold_commit=$Sha") }
-    [System.IO.File]::WriteAllLines($lockPath, $rewritten)
+    Write-LfLines -Path $lockPath -Lines $rewritten
 
     $installedBuild = $false
     $movedWrappers = New-Object System.Collections.Generic.List[string]
