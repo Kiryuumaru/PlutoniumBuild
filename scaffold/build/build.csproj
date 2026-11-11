@@ -9,6 +9,7 @@
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RunWorkingDirectory>$(MSBuildThisFileDirectory)..</RunWorkingDirectory>
+    <DefaultItemExcludes>$(DefaultItemExcludes);temp/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
