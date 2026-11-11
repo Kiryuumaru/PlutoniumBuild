@@ -107,6 +107,7 @@ public sealed class ScaffoldSource
         var fullPath = Path.Combine(Repository.RootPath, relativePath);
         var content = File.ReadAllText(fullPath);
         File.WriteAllText(fullPath, transform(content));
+        NormalizeLineEndings(fullPath);
 
         var lockPath = Path.Combine(ScaffoldBuildPath, "plutonium.lock");
         var lockRelativePath = ToLockPath(relativePath);
@@ -150,6 +151,7 @@ public sealed class ScaffoldSource
             {
                 versionElement.Value = version;
                 document.Save(propsPath);
+                NormalizeLineEndings(propsPath);
             }
         }
 
@@ -168,6 +170,7 @@ public sealed class ScaffoldSource
             {
                 reference.SetAttributeValue("Version", version);
                 document.Save(projectPath);
+                NormalizeLineEndings(projectPath);
             }
         }
 
@@ -201,7 +204,8 @@ public sealed class ScaffoldSource
             File.WriteAllText(globalJsonPath, node.ToJsonString(new System.Text.Json.JsonSerializerOptions
             {
                 WriteIndented = true,
-            }) + Environment.NewLine);
+            }) + "\n");
+            NormalizeLineEndings(globalJsonPath);
         }
 
         var lockPath = Path.Combine(repository.RootPath, "scaffold", "build", "plutonium.lock");
@@ -218,6 +222,27 @@ public sealed class ScaffoldSource
         }
 
         lockFile.Save();
+    }
+
+    private static void NormalizeLineEndings(string path)
+    {
+        var bytes = File.ReadAllBytes(path);
+        if (Array.IndexOf(bytes, (byte)'\r') < 0)
+        {
+            return;
+        }
+
+        var normalized = new byte[bytes.Length];
+        var length = 0;
+        foreach (var value in bytes)
+        {
+            if (value != (byte)'\r')
+            {
+                normalized[length++] = value;
+            }
+        }
+
+        File.WriteAllBytes(path, normalized[..length]);
     }
 
     private static string? ToLockPath(string relativePath)

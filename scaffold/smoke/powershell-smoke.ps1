@@ -39,6 +39,162 @@ function Fail-Smoke {
     $script:failures = $script:failures + 1
 }
 
+function Write-LfLines {
+    param([string]$Path, [System.Collections.Generic.IEnumerable[string]]$Lines)
+    $text = [string]::Join("`n", [string[]]$Lines)
+    if ($text.Length -gt 0) {
+        $text += "`n"
+    }
+    $encoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
+    [System.IO.File]::WriteAllText($Path, $text, $encoding)
+}
+
+function Add-LfLine {
+    param([string]$Path, [string]$Value)
+    [System.IO.File]::AppendAllText($Path, $Value + "`n")
+}
+
+function Set-LfFile {
+    param([string]$Path, [string]$Value)
+    [System.IO.File]::WriteAllText($Path, $Value + "`n")
+}
+
+function Set-CrlfFile {
+    param([string]$Path)
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $lf = New-Object System.Collections.Generic.List[byte]
+    foreach ($value in $bytes) {
+        if ($value -ne 13) {
+            $lf.Add($value)
+        }
+    }
+    $crlf = New-Object System.Collections.Generic.List[byte]
+    foreach ($value in $lf) {
+        if ($value -eq 10) {
+            $crlf.Add(13)
+        }
+        $crlf.Add($value)
+    }
+    [System.IO.File]::WriteAllBytes($Path, $crlf.ToArray())
+}
+
+function Assert-LfFile {
+    param([string]$Path, [string]$Label)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        Fail-Smoke "$Label is missing: $Path"
+        return
+    }
+    $text = [System.IO.File]::ReadAllText($Path)
+    if ($text.Contains("`r")) {
+        Fail-Smoke "$Label contains a carriage return."
+    }
+}
+
+function Assert-CrlfFile {
+    param([string]$Path, [string]$Label)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        Fail-Smoke "$Label is missing: $Path"
+        return
+    }
+    $text = [System.IO.File]::ReadAllText($Path)
+    if (-not $text.Contains("`r`n")) {
+        Fail-Smoke "$Label does not contain CRLF line endings."
+    }
+}
+
+function Get-RawBlobHash {
+    param([string]$Repository, [string]$Path)
+    $formatOutput = (& git -C $Repository rev-parse --show-object-format 2>$null)
+    $format = if ($null -eq $formatOutput) { "" } else { ([string]$formatOutput).Trim() }
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($format)) {
+        $format = "sha1"
+    }
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $header = [System.Text.Encoding]::ASCII.GetBytes("blob " + $bytes.Length + [char]0)
+    $payload = New-Object byte[] ($header.Length + $bytes.Length)
+    [System.Array]::Copy($header, 0, $payload, 0, $header.Length)
+    [System.Array]::Copy($bytes, 0, $payload, $header.Length, $bytes.Length)
+    if ($format -eq "sha256") {
+        $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    }
+    else {
+        $algorithm = [System.Security.Cryptography.SHA1]::Create()
+    }
+    try {
+        $hash = $algorithm.ComputeHash($payload)
+    }
+    finally {
+        $algorithm.Dispose()
+    }
+    return ([System.BitConverter]::ToString($hash).Replace("-", "").ToLowerInvariant())
+}
+
+function Assert-CrlfCommitted {
+    param([string]$Repository, [string]$Relative, [string]$Label)
+    $worktree = Join-Path $Repository ($Relative.Replace("/", [System.IO.Path]::DirectorySeparatorChar))
+    Assert-CrlfFile -Path $worktree -Label $Label
+    $worktreeHash = Get-RawBlobHash -Repository $Repository -Path $worktree
+    $committedOutput = (& git -C $Repository rev-parse "HEAD:$Relative" 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $null -eq $committedOutput) {
+        Fail-Smoke "$Label could not resolve the committed blob."
+        return
+    }
+    $committedHash = ([string]$committedOutput).Trim()
+    if ($worktreeHash -ne $committedHash) {
+        Fail-Smoke "$Label commit does not contain the CRLF worktree bytes."
+    }
+}
+
+function Get-InstalledPath {
+    param([string]$Consumer, [string]$Relative)
+    if ($Relative.StartsWith("build/", [System.StringComparison]::Ordinal)) {
+        return Join-Path (Join-Path $Consumer "build") ($Relative.Substring(6).Replace("/", [System.IO.Path]::DirectorySeparatorChar))
+    }
+    return Join-Path $Consumer $Relative
+}
+
+function Assert-ManagedHashes {
+    param([string]$Consumer, [string]$Label)
+    $lockPath = Join-Path $Consumer "build/plutonium.lock"
+    foreach ($line in [System.IO.File]::ReadAllLines($lockPath)) {
+        if ($line -notmatch "^\s*managed\s+(\S+)\s+([0-9a-fA-F]{64})\s*$") { continue }
+        $relative = $Matches[1]
+        $expected = $Matches[2].ToLowerInvariant()
+        $installed = Get-InstalledPath -Consumer $Consumer -Relative $relative
+        if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) {
+            Fail-Smoke "$Label is missing managed file $relative."
+            continue
+        }
+        $actual = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $expected) {
+            Fail-Smoke "$Label has a managed hash mismatch for $relative."
+        }
+    }
+}
+
+function Assert-PreserveEntries {
+    param([string]$Consumer, [string]$Label)
+    $lockPath = Join-Path $Consumer "build/plutonium.lock"
+    $lines = [System.IO.File]::ReadAllLines($lockPath)
+    foreach ($relative in @("build/build.cs", "build/build.slnx", "build/Directory.Build.props", "build/Directory.Build.targets")) {
+        $found = $false
+        foreach ($line in $lines) {
+            if ($line -match "^\s*preserve\s+(\S+)\s*$" -and $Matches[1] -eq $relative) {
+                $found = $true
+                break
+            }
+        }
+        if (-not $found) {
+            Fail-Smoke "$Label lost the preserve entry for $relative."
+            continue
+        }
+        $installed = Get-InstalledPath -Consumer $Consumer -Relative $relative
+        if (-not (Test-Path -LiteralPath $installed -PathType Leaf)) {
+            Fail-Smoke "$Label is missing preserved file $relative."
+        }
+    }
+}
+
 function Invoke-SmokeScript {
     param(
         [string]$ScriptPath,
@@ -49,8 +205,15 @@ function Invoke-SmokeScript {
     )
     Push-Location -LiteralPath $WorkingDirectory
     try {
-        $output = & $hostExecutable -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @Arguments 2>&1
-        $exitCode = $LASTEXITCODE
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $output = & $hostExecutable -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @Arguments 2>&1
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
     }
     finally {
         Pop-Location
@@ -88,7 +251,7 @@ function Set-SourceManagedHash {
     if (-not $found) {
         throw "powershell-smoke: source lock has no managed entry for $Relative"
     }
-    [System.IO.File]::WriteAllLines($lockPath, $rewritten)
+    Write-LfLines -Path $lockPath -Lines $rewritten
 }
 
 function Add-SourceManagedEntry {
@@ -104,7 +267,7 @@ function Add-SourceManagedEntry {
         Set-SourceManagedHash -SourceRoot $SourceRoot -Relative $Relative
         return
     }
-    [System.IO.File]::AppendAllText($lockPath, "managed $Relative $hash" + [Environment]::NewLine)
+    [System.IO.File]::AppendAllText($lockPath, "managed $Relative $hash`n")
 }
 
 $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("plutonium-ps-smoke-" + [guid]::NewGuid().ToString("N"))
@@ -175,11 +338,14 @@ try {
     $propsSource = Join-Path $temporary "props-source"
     & git clone -q $source $propsSource
     if ($LASTEXITCODE -ne 0) { throw "powershell-smoke: could not clone props source." }
+    & git -C $propsSource config user.email smoke@example.test
+    & git -C $propsSource config user.name Smoke
     $propsPath = Join-Path $propsSource "src/Directory.Build.props"
     $propsText = [System.IO.File]::ReadAllText($propsPath)
     [System.IO.File]::WriteAllText($propsPath, $propsText.Replace("<Version>0.1.0</Version>", "<Version>9.9.9</Version>"))
     & git -C $propsSource add -A
     & git -C $propsSource commit -qm props-mismatch
+    if ($LASTEXITCODE -ne 0) { throw "powershell-smoke: props mismatch commit failed." }
     $propsSha = (& git -C $propsSource rev-parse HEAD).Trim()
     $propsTarget = Join-Path $temporary "props-target"
     New-Item -ItemType Directory -Path $propsTarget -Force | Out-Null
@@ -209,12 +375,12 @@ try {
 
     # Add preserve drift to the source: Program.cs becomes preserve-only in
     # effect, and its managed hash must follow the installed copy on update.
-    Add-Content -LiteralPath (Join-Path $source "scaffold/build/build.sh") -Value "# source marker"
-    Add-Content -LiteralPath (Join-Path $source "scaffold/build/Program.cs") -Value "// source marker"
+    Add-LfLine -Path (Join-Path $source "scaffold/build/build.sh") -Value "# source marker"
+    Add-LfLine -Path (Join-Path $source "scaffold/build/Program.cs") -Value "// source marker"
     $sourceLock = Join-Path $source "scaffold/build/plutonium.lock"
     $sourceLockText = [System.IO.File]::ReadAllText($sourceLock)
     if ($sourceLockText -notmatch "(?m)^preserve build/Program\.cs\s*$") {
-        [System.IO.File]::AppendAllText($sourceLock, "preserve build/Program.cs" + [Environment]::NewLine)
+        [System.IO.File]::AppendAllText($sourceLock, "preserve build/Program.cs`n")
     }
     Set-SourceManagedHash -SourceRoot $source -Relative "build/build.sh"
     Set-SourceManagedHash -SourceRoot $source -Relative "build/Program.cs"
@@ -245,6 +411,100 @@ try {
         Fail-Smoke "update was not idempotent at the same commit."
     }
 
+    # A Windows checkout can hand the installer a CRLF source tree and a CRLF
+    # installed lock. Both must normalize to LF before hashing or parsing.
+    $crlfSource = Join-Path $temporary "crlf-source"
+    & git clone -q $source $crlfSource
+    if ($LASTEXITCODE -ne 0) { throw "powershell-smoke: could not clone the CRLF source." }
+    & git -C $crlfSource config user.email smoke@example.test
+    & git -C $crlfSource config user.name Smoke
+    & git -C $crlfSource config core.autocrlf false
+    # Keep the committed blobs CRLF even if the source tree carries eol rules:
+    # info/attributes outranks .gitattributes, and a tree without eol rules
+    # makes the installer's fetch checkout deliver the CRLF bytes unchanged.
+    $crlfAttributes = Join-Path $crlfSource ".gitattributes"
+    if (Test-Path -LiteralPath $crlfAttributes -PathType Leaf) {
+        Remove-Item -LiteralPath $crlfAttributes -Force
+    }
+    $infoAttributes = Join-Path $crlfSource ".git/info/attributes"
+    [System.IO.File]::WriteAllText($infoAttributes, "* -text`n")
+    Get-ChildItem -LiteralPath (Join-Path $crlfSource "scaffold") -Recurse -File -Force | ForEach-Object {
+        Set-CrlfFile -Path $_.FullName
+    }
+    & git -C $crlfSource add -A
+    & git -C $crlfSource commit -qm crlf-source
+    if ($LASTEXITCODE -ne 0) { throw "powershell-smoke: CRLF source commit failed." }
+    Assert-CrlfCommitted -Repository $crlfSource -Relative "scaffold/build/build.sh" -Label "CRLF source build.sh"
+    Assert-CrlfCommitted -Repository $crlfSource -Relative "scaffold/build/plutonium.lock" -Label "CRLF source lock"
+    $crlfSha1 = (& git -C $crlfSource rev-parse HEAD).Trim()
+
+    $crlfConsumer = Join-Path $temporary "crlf-consumer"
+    New-Item -ItemType Directory -Path $crlfConsumer -Force | Out-Null
+    & git -C $crlfConsumer init -q
+    & git -C $crlfConsumer config user.email smoke@example.test
+    & git -C $crlfConsumer config user.name Smoke
+    $crlfInstall = Invoke-SmokeScript -ScriptPath (Join-Path $RepositoryRoot "init.ps1") `
+        -Arguments @("-Source", $crlfSource, "-Sha", $crlfSha1, "-Target", $crlfConsumer) `
+        -WorkingDirectory $RepositoryRoot -Label "CRLF init"
+    if ($crlfInstall.ExitCode -ne 0) { throw "powershell-smoke: CRLF init failed." }
+    $crlfLock = Join-Path $crlfConsumer "build/plutonium.lock"
+    Assert-LfFile -Path $crlfLock -Label "CRLF init lock"
+    Assert-LfFile -Path (Join-Path $crlfConsumer "build/build.sh") -Label "CRLF init build.sh"
+    Assert-LfFile -Path (Join-Path $crlfConsumer "build/build.csproj") -Label "CRLF init build.csproj"
+    Assert-LfFile -Path (Join-Path $crlfConsumer "build.sh") -Label "CRLF init root build.sh"
+    if ((Get-Content -LiteralPath $crlfLock -Raw) -notmatch "scaffold_commit=$crlfSha1") {
+        Fail-Smoke "CRLF init lock does not record the requested commit."
+    }
+    Assert-PreserveEntries -Consumer $crlfConsumer -Label "CRLF init"
+    Assert-ManagedHashes -Consumer $crlfConsumer -Label "CRLF init"
+
+    $crlfBuildSh = Join-Path $crlfSource "scaffold/build/build.sh"
+    $crlfBuildLines = New-Object System.Collections.Generic.List[string]
+    $crlfBuildLines.AddRange([System.IO.File]::ReadAllLines($crlfBuildSh))
+    $crlfBuildLines.Add("# crlf update marker")
+    Write-LfLines -Path $crlfBuildSh -Lines $crlfBuildLines
+    Set-SourceManagedHash -SourceRoot $crlfSource -Relative "build/build.sh"
+    Set-CrlfFile -Path $crlfBuildSh
+    Set-CrlfFile -Path (Join-Path $crlfSource "scaffold/build/plutonium.lock")
+    & git -C $crlfSource add -A
+    & git -C $crlfSource commit -qm crlf-update
+    if ($LASTEXITCODE -ne 0) { throw "powershell-smoke: CRLF update commit failed." }
+    Assert-CrlfCommitted -Repository $crlfSource -Relative "scaffold/build/build.sh" -Label "CRLF update build.sh"
+    Assert-CrlfCommitted -Repository $crlfSource -Relative "scaffold/build/plutonium.lock" -Label "CRLF update lock"
+    $crlfSha2 = (& git -C $crlfSource rev-parse HEAD).Trim()
+
+    Set-CrlfFile -Path $crlfLock
+    $crlfUpdate = Invoke-SmokeScript -ScriptPath (Join-Path $crlfConsumer "build/update.ps1") `
+        -Arguments @("-Source", $crlfSource, "-Sha", $crlfSha2, "-Target", $crlfConsumer, "-NoSmoke") `
+        -WorkingDirectory $crlfConsumer -Label "CRLF update"
+    if ($crlfUpdate.ExitCode -ne 0) { throw "powershell-smoke: CRLF update failed." }
+    Assert-LfFile -Path $crlfLock -Label "CRLF update lock"
+    Assert-LfFile -Path (Join-Path $crlfConsumer "build/build.sh") -Label "CRLF update build.sh"
+    if (-not (Select-String -LiteralPath (Join-Path $crlfConsumer "build/build.sh") -Pattern "# crlf update marker" -Quiet)) {
+        Fail-Smoke "CRLF update did not install the managed build.sh change."
+    }
+    if ((Get-Content -LiteralPath $crlfLock -Raw) -notmatch "scaffold_commit=$crlfSha2") {
+        Fail-Smoke "CRLF update lock does not record the requested commit."
+    }
+    Assert-PreserveEntries -Consumer $crlfConsumer -Label "CRLF update"
+    Assert-ManagedHashes -Consumer $crlfConsumer -Label "CRLF update"
+
+    $crlfJournal = Get-ChildItem -LiteralPath (Join-Path $crlfConsumer "build/temp/update") -Filter "journal.txt" -Recurse | Select-Object -First 1
+    if ($null -eq $crlfJournal) {
+        Fail-Smoke "CRLF update did not journal the previous commit."
+    }
+    elseif ((Get-Content -LiteralPath $crlfJournal.FullName -Raw) -notmatch "(?m)^from_commit=$crlfSha1\s*$") {
+        Fail-Smoke "CRLF update did not read the previous commit from the CRLF lock."
+    }
+
+    Set-CrlfFile -Path $crlfLock
+    $crlfAgain = Invoke-SmokeScript -ScriptPath (Join-Path $crlfConsumer "build/update.ps1") `
+        -Arguments @("-Source", $crlfSource, "-Sha", $crlfSha2, "-Target", $crlfConsumer, "-NoSmoke") `
+        -WorkingDirectory $crlfConsumer -Label "CRLF idempotent update"
+    if ($crlfAgain.ExitCode -ne 0 -or $crlfAgain.Output -notmatch "already at") {
+        Fail-Smoke "update was not idempotent at the same commit with a CRLF lock."
+    }
+
     # On Linux, a fake cached toolchain can force the smoke build to fail and
     # prove that update.ps1 removes files introduced by the new lock.
     $isWindowsHost = $PSVersionTable.PSEdition -eq "Desktop" -or $env:OS -eq "Windows_NT"
@@ -266,7 +526,7 @@ exit 1
 
         $lockBeforeRollback = (Get-FileHash -LiteralPath (Join-Path $consumer "build/plutonium.lock") -Algorithm SHA256).Hash
         $buildShBeforeRollback = (Get-FileHash -LiteralPath (Join-Path $consumer "build/build.sh") -Algorithm SHA256).Hash
-        Set-Content -LiteralPath (Join-Path $source "scaffold/build/rollback-probe.txt") -Value "probe"
+        Set-LfFile -Path (Join-Path $source "scaffold/build/rollback-probe.txt") -Value "probe"
         Add-SourceManagedEntry -SourceRoot $source -Relative "build/rollback-probe.txt"
         & git -C $source add -A
         & git -C $source commit -qm linux-smoke-rollback
@@ -322,7 +582,7 @@ exit 1
         $lockBeforeRollback = (Get-FileHash -LiteralPath (Join-Path $consumer "build/plutonium.lock") -Algorithm SHA256).Hash
         $buildShBeforeRollback = (Get-FileHash -LiteralPath (Join-Path $consumer "build/build.sh") -Algorithm SHA256).Hash
         Add-Content -LiteralPath $preservedProgram -Value "#error smoke rollback probe"
-        Set-Content -LiteralPath (Join-Path $source "scaffold/build/rollback-probe.txt") -Value "probe"
+        Set-LfFile -Path (Join-Path $source "scaffold/build/rollback-probe.txt") -Value "probe"
         Add-SourceManagedEntry -SourceRoot $source -Relative "build/rollback-probe.txt"
         & git -C $source add -A
         & git -C $source commit -qm smoke-rollback

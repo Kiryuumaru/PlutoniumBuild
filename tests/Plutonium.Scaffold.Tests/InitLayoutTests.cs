@@ -78,13 +78,14 @@ public sealed class InitLayoutTests
 
         var lockFile = PlutoniumLockFile.Load(Path.Combine(target.RootPath, "build", "plutonium.lock"));
         Assert.False(string.IsNullOrWhiteSpace(lockFile.GetValue("format")));
-        var recordedSource = (lockFile.GetValue("source") ?? string.Empty).TrimEnd('/', '\\');
+        var recordedSource = ScaffoldTestContext.NormalizeSourceValue(
+            lockFile.GetValue("source") ?? string.Empty);
         Assert.Contains(
             recordedSource,
             new[]
             {
-                source.SourcePath.TrimEnd('/', '\\'),
-                source.Repository.FileUrl.TrimEnd('/', '\\'),
+                ScaffoldTestContext.NormalizeSourceValue(source.SourcePath),
+                ScaffoldTestContext.NormalizeSourceValue(source.Repository.FileUrl),
             },
             StringComparer.Ordinal);
         Assert.Equal(source.HeadSha, lockFile.GetValue("scaffold_commit"));

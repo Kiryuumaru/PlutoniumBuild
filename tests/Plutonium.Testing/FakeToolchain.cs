@@ -33,7 +33,12 @@ public sealed class FakeToolchain
     /// <summary>Gets the temporary directory tests should export as <c>TMPDIR</c>.</summary>
     public string TempDirectory => Path.Combine(RootDirectory, "tmp");
 
-    /// <summary>Creates the shim and home directories.</summary>
+    /// <summary>
+    /// Creates the shim and home directories. The shim directory starts with an
+    /// unusable <c>dotnet</c> shim so a real SDK on the host <c>PATH</c> can never
+    /// satisfy a version probe; tests that need a usable fake SDK replace it with
+    /// <see cref="AddDotNet"/>.
+    /// </summary>
     /// <param name="workspace">The workspace that owns the toolchain.</param>
     /// <returns>The prepared toolchain.</returns>
     public static FakeToolchain Create(TempWorkspace workspace)
@@ -45,7 +50,9 @@ public sealed class FakeToolchain
         Directory.CreateDirectory(shims);
         Directory.CreateDirectory(Path.Combine(root, "home"));
         Directory.CreateDirectory(Path.Combine(root, "tmp"));
-        return new FakeToolchain(root, shims, Path.Combine(root, "invocations.log"));
+        var toolchain = new FakeToolchain(root, shims, Path.Combine(root, "invocations.log"));
+        toolchain.AddDotNet("0.0.0", 1);
+        return toolchain;
     }
 
     /// <summary>
@@ -173,8 +180,9 @@ public sealed class FakeToolchain
             builder.AppendLine();
         }
 
+        var content = builder.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
         var path = Path.Combine(ShimDirectory, name);
-        File.WriteAllText(path, builder.ToString());
+        File.WriteAllText(path, content);
         if (!OperatingSystem.IsWindows())
         {
             File.SetUnixFileMode(
@@ -221,6 +229,10 @@ public sealed class FakeToolchain
             ["PATH"] = BuildPath(includeExistingPath),
             ["HOME"] = HomeDirectory,
             ["TMPDIR"] = TempDirectory,
+            ["TMP"] = TempDirectory,
+            ["TEMP"] = TempDirectory,
+            ["NUGET_PACKAGES"] = Path.Combine(RootDirectory, "nuget", "packages"),
+            ["NUGET_HTTP_CACHE_PATH"] = Path.Combine(RootDirectory, "nuget", "http-cache"),
             ["DOTNET_CLI_HOME"] = HomeDirectory,
             ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1",
             ["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1",

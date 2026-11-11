@@ -1,3 +1,4 @@
+using System.Security;
 using Plutonium.Testing;
 using Xunit;
 
@@ -7,6 +8,14 @@ namespace Plutonium.Sdk.Tests;
 internal static class BootstrapTestContext
 {
     internal const string SdkVersion = "10.0.402";
+
+    private const string UnameShim = """
+        case "${1:-}" in
+          -s) printf 'Linux\n' ;;
+          -m) printf 'x86_64\n' ;;
+          *) printf 'Linux\n' ;;
+        esac
+        """;
 
     internal static string CopyScaffold(TempWorkspace workspace, RepositoryLayout layout)
     {
@@ -18,6 +27,7 @@ internal static class BootstrapTestContext
 
         var root = workspace.PathFor("scaffold");
         CopyTree(layout.ScaffoldBuildDirectory, Path.Combine(root, "build"));
+        WriteNuGetConfig(workspace, root);
         return root;
     }
 
@@ -28,12 +38,38 @@ internal static class BootstrapTestContext
     {
         var script = Path.Combine(scaffoldRoot, "build", "build.sh");
         Assert.True(File.Exists(script), "Scaffold build script not found: " + script);
+        if (OperatingSystem.IsWindows())
+        {
+            // bootstrap.sh's installer path is intentionally POSIX-only. Git Bash
+            // emulates it, so the platform probe is pinned to the Linux RID the
+            // fake installer payload is written for.
+            toolchain.AddShim("uname", UnameShim);
+        }
+
         return ProcessHarness.RunBashAsync(
             script,
             [],
             scaffoldRoot,
             toolchain.BuildEnvironment(extraEnvironment, includeExistingPath: false),
             TimeSpan.FromMinutes(10));
+    }
+
+    private static void WriteNuGetConfig(TempWorkspace workspace, string scaffoldRoot)
+    {
+        var packages = workspace.PathFor("nuget", "packages").Replace('\\', '/');
+        var content = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <configuration>
+              <packageSources>
+                <clear />
+              </packageSources>
+              <config>
+                <add key="globalPackagesFolder" value="PACKAGES" />
+              </config>
+            </configuration>
+            """;
+        content = content.Replace("PACKAGES", SecurityElement.Escape(packages), StringComparison.Ordinal);
+        File.WriteAllText(Path.Combine(scaffoldRoot, "NuGet.Config"), content);
     }
 
     internal static string WriteFakeInstaller(
@@ -79,7 +115,8 @@ internal static class BootstrapTestContext
         content = content
             .Replace("MARKER", markerPath, StringComparison.Ordinal)
             .Replace("LOG", toolchain.LogPath, StringComparison.Ordinal)
-            .Replace("VERSION", sdkVersion, StringComparison.Ordinal);
+            .Replace("VERSION", sdkVersion, StringComparison.Ordinal)
+            .Replace("\r\n", "\n", StringComparison.Ordinal);
 
         File.WriteAllText(payloadPath, content);
         if (!OperatingSystem.IsWindows())

@@ -69,6 +69,7 @@ public sealed class TempWorkspace : IDisposable
             {
                 if (Directory.Exists(Root))
                 {
+                    ClearReadOnlyAttributes(Root);
                     Directory.Delete(Root, recursive: true);
                 }
 
@@ -82,6 +83,44 @@ public sealed class TempWorkspace : IDisposable
             {
                 Thread.Sleep(100);
             }
+        }
+    }
+
+    private static void ClearReadOnlyAttributes(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(path);
+        }
+        catch (FileNotFoundException)
+        {
+            return;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return;
+        }
+
+        if ((attributes & FileAttributes.ReadOnly) != 0)
+        {
+            File.SetAttributes(path, attributes & ~FileAttributes.ReadOnly);
+        }
+
+        if ((attributes & FileAttributes.Directory) == 0 ||
+            (attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            return;
+        }
+
+        foreach (var entry in Directory.EnumerateFileSystemEntries(path))
+        {
+            ClearReadOnlyAttributes(entry);
         }
     }
 }

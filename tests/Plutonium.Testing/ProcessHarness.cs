@@ -181,11 +181,187 @@ public static class ProcessHarness
         TimeSpan? timeout = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scriptPath);
-        var allArguments = new List<string>(arguments.Count + 1) { scriptPath };
-        allArguments.AddRange(arguments);
+        var executable = ResolveBashExecutable();
+        var allArguments = new List<string>(arguments.Count + 1)
+        {
+            ToBashPath(scriptPath),
+        };
+        allArguments.AddRange(arguments.Select(ToBashPath));
         return RunAsync(
-            new ProcessRequest("bash", allArguments, workingDirectory, environment, timeout));
+            new ProcessRequest(executable, allArguments, workingDirectory, environment, timeout));
     }
+
+    /// <summary>
+    /// Resolves the bash used to run scripts. Unix uses <c>bash</c> from
+    /// <c>PATH</c>; Windows must use Git for Windows and never the WSL stub in
+    /// <c>System32</c>.
+    /// </summary>
+    /// <returns>The bash executable path or command name.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// No usable Git Bash was found, or the configured path is the WSL stub.
+    /// </exception>
+    private static string ResolveBashExecutable()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return "bash";
+        }
+
+        var configured = Environment.GetEnvironmentVariable("PLUTONIUM_GIT_BASH");
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            configured = Environment.ExpandEnvironmentVariables(configured.Trim().Trim('"'));
+            if (!File.Exists(configured))
+            {
+                throw new InvalidOperationException(
+                    "PLUTONIUM_GIT_BASH points to '" + configured +
+                    "', but that file does not exist. Point it at Git for Windows' bash.exe.");
+            }
+
+            if (IsWslBashStub(configured))
+            {
+                throw new InvalidOperationException(
+                    "PLUTONIUM_GIT_BASH points to '" + configured +
+                    "', which is the WSL stub. Point it at Git for Windows' bash.exe.");
+            }
+
+            return configured;
+        }
+
+        var candidates = new List<string>();
+        AddGitBashCandidate(
+            candidates,
+            Environment.GetEnvironmentVariable("GIT_INSTALL_ROOT"),
+            "bin",
+            "bash.exe");
+        AddGitBashCandidate(
+            candidates,
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            "Git",
+            "bin",
+            "bash.exe");
+        AddGitBashCandidate(
+            candidates,
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            "Git",
+            "bin",
+            "bash.exe");
+        AddGitBashCandidate(
+            candidates,
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Programs",
+            "Git",
+            "bin",
+            "bash.exe");
+
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            foreach (var entry in path.Split(
+                         Path.PathSeparator,
+                         StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var directory = entry.Trim('"');
+                if (directory.Length == 0)
+                {
+                    continue;
+                }
+
+                AddGitBashCandidate(candidates, directory, "bash.exe");
+                AddGitBashCandidate(candidates, directory, "..", "bin", "bash.exe");
+            }
+        }
+
+        foreach (var candidate in candidates)
+        {
+            string fullPath;
+            try
+            {
+                fullPath = Path.GetFullPath(candidate);
+            }
+            catch (ArgumentException)
+            {
+                continue;
+            }
+            catch (NotSupportedException)
+            {
+                continue;
+            }
+
+            if (IsWslBashStubPath(fullPath))
+            {
+                continue;
+            }
+
+            if (File.Exists(fullPath))
+            {
+                return fullPath;
+            }
+        }
+
+        throw new InvalidOperationException(
+            "Git Bash was not found. The Windows test suite executes shell scripts with Git for Windows " +
+            "and refuses to fall back to the WSL stub in System32. Install Git for Windows or set " +
+            "PLUTONIUM_GIT_BASH to the absolute path of its bash.exe.");
+    }
+
+    private static bool IsWslBashStub(string path)
+    {
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(path);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+
+        return IsWslBashStubPath(fullPath);
+    }
+
+    private static bool IsWslBashStubPath(string fullPath)
+    {
+        var systemBash = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "bash.exe");
+        if (string.Equals(fullPath, systemBash, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var directory = Path.GetFileName(Path.GetDirectoryName(fullPath));
+        return string.Equals(directory, "System32", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(directory, "Sysnative", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void AddGitBashCandidate(
+        ICollection<string> candidates,
+        string? root,
+        params string[] segments)
+    {
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            return;
+        }
+
+        var path = root;
+        foreach (var segment in segments)
+        {
+            path = Path.Combine(path, segment);
+        }
+
+        candidates.Add(path);
+    }
+
+    private static string ToBashPath(string value) =>
+        OperatingSystem.IsWindows()
+            ? value.Replace('\\', '/')
+            : value;
 
     private static async Task<string> ReadAvailableAsync(Task<string> read)
     {

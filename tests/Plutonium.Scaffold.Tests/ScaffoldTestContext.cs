@@ -125,6 +125,19 @@ internal static class ScaffoldTestContext
         Assert.False(result.Succeeded, operation + " unexpectedly succeeded." + Environment.NewLine + result.Describe());
     }
 
+    /// <summary>
+    /// Normalizes a source value for comparison. The harness hands Git Bash a
+    /// forward-slash path on Windows, so an installed lock can record a
+    /// different separator than <see cref="ScaffoldSource.SourcePath"/>.
+    /// </summary>
+    /// <param name="value">The recorded or expected source value.</param>
+    /// <returns>The value with forward slashes and no trailing separator.</returns>
+    internal static string NormalizeSourceValue(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return value.Replace('\\', '/').TrimEnd('/');
+    }
+
     private static ScaffoldManifest LoadManifest()
     {
         var layout = RepositoryLayout.Locate();
