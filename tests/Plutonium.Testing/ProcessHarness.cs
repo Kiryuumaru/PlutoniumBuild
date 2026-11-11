@@ -188,13 +188,204 @@ public static class ProcessHarness
         };
         allArguments.AddRange(arguments.Select(ToBashPath));
         return RunAsync(
-            new ProcessRequest(executable, allArguments, workingDirectory, environment, timeout));
+            new ProcessRequest(
+                executable,
+                allArguments,
+                workingDirectory,
+                PrepareBashEnvironment(executable, environment),
+                timeout));
+    }
+
+    /// <summary>
+    /// Adds the Git for Windows tool directories to the child's <c>PATH</c> on
+    /// Windows. The <c>bin\bash.exe</c> compat wrapper used to prepend these
+    /// directories itself; the real <c>usr\bin\bash.exe</c> does not, so the
+    /// harness supplies them explicitly. A caller-supplied <c>PATH</c> keeps its
+    /// entries first so a shim directory stays ahead of them; an inherited host
+    /// <c>PATH</c> gets the tool directories first so Git's POSIX tools win over
+    /// the same-named Windows system tools (<c>find.exe</c>, <c>sort.exe</c>).
+    /// </summary>
+    /// <param name="executable">The resolved bash executable.</param>
+    /// <param name="environment">The caller's environment overrides.</param>
+    /// <returns>The environment to use for the child.</returns>
+    private static IReadOnlyDictionary<string, string?>? PrepareBashEnvironment(
+        string executable,
+        IReadOnlyDictionary<string, string?>? environment)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return environment;
+        }
+
+        var toolDirectories = BashToolDirectories(executable);
+        if (toolDirectories.Count == 0)
+        {
+            return environment;
+        }
+
+        return PrepareBashEnvironmentCore(
+            toolDirectories,
+            environment,
+            Environment.GetEnvironmentVariable("PATH"));
+    }
+
+    /// <summary>
+    /// Builds the child environment for a bash invocation on Windows. The
+    /// platform-neutral core keeps the ordering decision testable off Windows:
+    /// a caller-supplied <c>PATH</c> stays first and the Git tool directories
+    /// are appended, while an inherited host <c>PATH</c> gets the Git tool
+    /// directories prepended. A caller that removes <c>PATH</c> by setting it
+    /// to null keeps that removal.
+    /// </summary>
+    /// <param name="toolDirectories">The Git for Windows tool directories.</param>
+    /// <param name="environment">The caller's environment overrides.</param>
+    /// <param name="inheritedPath">The host <c>PATH</c> used when the caller supplies none.</param>
+    /// <returns>The environment to use for the child.</returns>
+    internal static IReadOnlyDictionary<string, string?>? PrepareBashEnvironmentCore(
+        IReadOnlyList<string> toolDirectories,
+        IReadOnlyDictionary<string, string?>? environment,
+        string? inheritedPath)
+    {
+        ArgumentNullException.ThrowIfNull(toolDirectories);
+
+        string? configuredPath = null;
+        var callerSuppliedPath = environment is not null &&
+            environment.TryGetValue("PATH", out configuredPath);
+        string? path;
+        if (callerSuppliedPath)
+        {
+            if (configuredPath is null)
+            {
+                return environment;
+            }
+
+            path = configuredPath;
+        }
+        else
+        {
+            path = inheritedPath;
+        }
+
+        var comparer = StringComparer.OrdinalIgnoreCase;
+        var pathEntries = new List<string>();
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            pathEntries.AddRange(path.Split(
+                Path.PathSeparator,
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        }
+
+        var entries = new List<string>();
+        void Add(string entry)
+        {
+            if (!entries.Contains(entry, comparer))
+            {
+                entries.Add(entry);
+            }
+        }
+
+        if (callerSuppliedPath)
+        {
+            foreach (var entry in pathEntries)
+            {
+                Add(entry);
+            }
+
+            foreach (var directory in toolDirectories)
+            {
+                Add(directory);
+            }
+        }
+        else
+        {
+            foreach (var directory in toolDirectories)
+            {
+                Add(directory);
+            }
+
+            foreach (var entry in pathEntries)
+            {
+                Add(entry);
+            }
+        }
+
+        var prepared = environment is null
+            ? new Dictionary<string, string?>(StringComparer.Ordinal)
+            : new Dictionary<string, string?>(environment, StringComparer.Ordinal);
+        prepared["PATH"] = string.Join(Path.PathSeparator, entries);
+        return prepared;
+    }
+
+    /// <summary>
+    /// Lists the Git for Windows directories a bash child needs on
+    /// <c>PATH</c>: <c>usr\bin</c> for the POSIX tools and the
+    /// <c>&lt;MSYSTEM&gt;\bin</c> directory that holds <c>git.exe</c> and its
+    /// runtime. The list is ordered with <c>usr\bin</c> first so a script that
+    /// runs <c>bash</c> finds the real shell, not the compat wrapper.
+    /// </summary>
+    /// <param name="executable">The resolved bash executable.</param>
+    /// <returns>The existing tool directories, or an empty list off Windows.</returns>
+    internal static IReadOnlyList<string> BashToolDirectories(string executable)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return [];
+        }
+
+        var bashDirectory = Path.GetDirectoryName(executable);
+        if (string.IsNullOrWhiteSpace(bashDirectory))
+        {
+            return [];
+        }
+
+        var name = Path.GetFileName(bashDirectory);
+        string? root = null;
+        if (string.Equals(name, "bin", StringComparison.OrdinalIgnoreCase))
+        {
+            var parent = Path.GetDirectoryName(bashDirectory);
+            root = string.Equals(Path.GetFileName(parent), "usr", StringComparison.OrdinalIgnoreCase)
+                ? Path.GetDirectoryName(parent)
+                : parent;
+        }
+
+        var directories = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Add(string? directory)
+        {
+            if (!string.IsNullOrWhiteSpace(directory) &&
+                Directory.Exists(directory) &&
+                seen.Add(directory))
+            {
+                directories.Add(directory);
+            }
+        }
+
+        if (root is not null)
+        {
+            Add(Path.Combine(root, "usr", "bin"));
+        }
+
+        Add(bashDirectory);
+
+        if (root is not null)
+        {
+            foreach (var msystem in new[] { "ucrt64", "mingw64", "clang64", "clangarm64", "mingw32" })
+            {
+                Add(Path.Combine(root, msystem, "bin"));
+            }
+        }
+
+        return directories;
     }
 
     /// <summary>
     /// Resolves the bash used to run scripts. Unix uses <c>bash</c> from
     /// <c>PATH</c>; Windows must use Git for Windows and never the WSL stub in
-    /// <c>System32</c>.
+    /// <c>System32</c>. Git for Windows ships two entry points: the
+    /// <c>bin\bash.exe</c> compat wrapper prepends <c>&lt;MSYSTEM&gt;\bin</c>
+    /// (for example <c>ucrt64\bin</c>) to <c>PATH</c> before running the real
+    /// shell, which would displace a test's shim directory. The sibling
+    /// <c>usr\bin\bash.exe</c> is the real shell and preserves <c>PATH</c> order.
     /// </summary>
     /// <returns>The bash executable path or command name.</returns>
     /// <exception cref="InvalidOperationException">
@@ -225,7 +416,7 @@ public static class ProcessHarness
                     "', which is the WSL stub. Point it at Git for Windows' bash.exe.");
             }
 
-            return configured;
+            return PreferRealGitBash(configured);
         }
 
         var candidates = new List<string>();
@@ -295,7 +486,7 @@ public static class ProcessHarness
 
             if (File.Exists(fullPath))
             {
-                return fullPath;
+                return PreferRealGitBash(fullPath);
             }
         }
 
@@ -303,6 +494,35 @@ public static class ProcessHarness
             "Git Bash was not found. The Windows test suite executes shell scripts with Git for Windows " +
             "and refuses to fall back to the WSL stub in System32. Install Git for Windows or set " +
             "PLUTONIUM_GIT_BASH to the absolute path of its bash.exe.");
+    }
+
+    /// <summary>
+    /// Resolves Git for Windows' <c>bin\bash.exe</c> compat wrapper to the real
+    /// <c>usr\bin\bash.exe</c> sibling when it exists. The wrapper's
+    /// <c>setup_environment</c> prepends <c>&lt;MSYSTEM&gt;\bin</c> to
+    /// <c>PATH</c>, which displaces the shim directory the test harness puts
+    /// first; the real shell does not rewrite <c>PATH</c>.
+    /// </summary>
+    /// <param name="bashPath">A bash executable that already exists.</param>
+    /// <returns>The real shell when the input is the compat wrapper; otherwise the input.</returns>
+    private static string PreferRealGitBash(string bashPath)
+    {
+        var directory = Path.GetDirectoryName(bashPath);
+        if (string.IsNullOrWhiteSpace(directory) ||
+            !string.Equals(Path.GetFileName(directory), "bin", StringComparison.OrdinalIgnoreCase))
+        {
+            return bashPath;
+        }
+
+        var parent = Path.GetDirectoryName(directory);
+        if (parent is null ||
+            string.Equals(Path.GetFileName(parent), "usr", StringComparison.OrdinalIgnoreCase))
+        {
+            return bashPath;
+        }
+
+        var realBash = Path.Combine(parent, "usr", "bin", "bash.exe");
+        return File.Exists(realBash) ? realBash : bashPath;
     }
 
     private static bool IsWslBashStub(string path)

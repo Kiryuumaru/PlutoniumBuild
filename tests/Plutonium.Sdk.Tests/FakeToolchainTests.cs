@@ -5,8 +5,9 @@ namespace Plutonium.Sdk.Tests;
 
 /// <summary>
 /// Pins the fake toolchain harness: shims must be executable by the bash that
-/// runs them, and the shim directory must win PATH resolution ahead of the
-/// host's real tools.
+/// runs them, the shim directory must win PATH resolution ahead of the host's
+/// real tools, and an inherited host PATH must put Git's POSIX tools ahead of
+/// the Windows system tools that shadow them.
 /// </summary>
 public sealed class FakeToolchainTests
 {
@@ -75,5 +76,99 @@ public sealed class FakeToolchainTests
             environment: toolchain.BuildEnvironment(includeExistingPath: false));
 
         Assert.True(isolatedPath.Succeeded, isolatedPath.Describe());
+    }
+
+    /// <summary>
+    /// A bash script invoked without an explicit PATH still resolves the POSIX
+    /// tools Git for Windows keeps in <c>usr\bin</c>, including the tools that
+    /// the Windows system directories shadow by name. The compat wrapper used
+    /// to supply them; the real shell does not, so the harness must put them
+    /// ahead of the inherited host PATH.
+    /// </summary>
+    [Fact]
+    public async Task BashScripts_ResolvePosixToolsWithoutAPathOverride()
+    {
+        using var workspace = TempWorkspace.Create("sdk-bash-tools");
+        var probe = Path.Combine(workspace.Root, "tools.sh");
+        File.WriteAllText(
+            probe,
+            """
+            #!/usr/bin/env bash
+            set -euo pipefail
+            command -v awk >/dev/null
+            command -v sed >/dev/null
+            command -v mktemp >/dev/null
+            for tool in find sort; do
+              resolved=$(command -v "$tool" || true)
+              if [ -z "$resolved" ]; then
+                printf '%s is not on PATH\n' "$tool" >&2
+                exit 7
+              fi
+              directory=$(cd "$(dirname "$resolved")" && pwd -P | tr '[:upper:]' '[:lower:]')
+              case "$directory" in
+                */windows/system32|*/windows/sysnative)
+                  printf '%s resolved to the Windows system tool: %s\n' "$tool" "$resolved" >&2
+                  exit 8
+                  ;;
+              esac
+            done
+            if ! find --version </dev/null >/dev/null 2>&1; then
+              find "$1" -name 'plutonium-nonexistent-probe' </dev/null >/dev/null
+            fi
+            if ! sort --version </dev/null >/dev/null 2>&1; then
+              printf 'b\na\n' | sort >/dev/null
+            fi
+            """.Replace("\r\n", "\n", StringComparison.Ordinal));
+        Assert.DoesNotContain("\r", File.ReadAllText(probe), StringComparison.Ordinal);
+
+        var result = await ProcessHarness.RunBashAsync(probe, [workspace.Root]);
+
+        Assert.True(result.Succeeded, result.Describe());
+    }
+
+    /// <summary>
+    /// An inherited host PATH must put the Git tool directories first so the
+    /// Windows system tools that share names with POSIX tools (<c>find.exe</c>,
+    /// <c>sort.exe</c>) cannot shadow them.
+    /// </summary>
+    [Fact]
+    public void InheritedPath_PutsGitToolsBeforeSystemDirectories()
+    {
+        var tools = new[] { "git/usr/bin", "git/ucrt64/bin" };
+        var hostEntries = new[] { "windows/System32", "windows" };
+
+        var prepared = ProcessHarness.PrepareBashEnvironmentCore(
+            tools,
+            environment: null,
+            inheritedPath: string.Join(Path.PathSeparator, hostEntries));
+
+        Assert.NotNull(prepared);
+        Assert.Equal(
+            string.Join(Path.PathSeparator, tools.Concat(hostEntries)),
+            prepared["PATH"]);
+    }
+
+    /// <summary>
+    /// A caller-supplied PATH keeps its entries first so a shim directory still
+    /// wins, and the Git tool directories are appended after it.
+    /// </summary>
+    [Fact]
+    public void CallerPath_KeepsShimDirectoryBeforeGitTools()
+    {
+        var tools = new[] { "git/usr/bin", "git/ucrt64/bin" };
+        var callerEntries = new[] { "toolchain/bin", "windows/System32" };
+
+        var prepared = ProcessHarness.PrepareBashEnvironmentCore(
+            tools,
+            new Dictionary<string, string?>(StringComparer.Ordinal)
+            {
+                ["PATH"] = string.Join(Path.PathSeparator, callerEntries),
+            },
+            inheritedPath: "windows/System32");
+
+        Assert.NotNull(prepared);
+        Assert.Equal(
+            string.Join(Path.PathSeparator, callerEntries.Concat(tools)),
+            prepared["PATH"]);
     }
 }

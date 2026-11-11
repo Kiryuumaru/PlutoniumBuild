@@ -201,7 +201,7 @@ public sealed class FakeToolchain
         var entries = new List<string> { ShimDirectory };
         if (windows)
         {
-            foreach (var directory in GitBashToolDirectories())
+            foreach (var directory in ProcessHarness.BashToolDirectories(ProcessHarness.ResolveBashExecutable()))
             {
                 AddPathEntry(entries, directory, comparer);
             }
@@ -301,30 +301,6 @@ public sealed class FakeToolchain
                 "The fake tool shim '" + path + "' is not executable under Git Bash." +
                 Environment.NewLine + result.Describe());
         }
-    }
-
-    private static IReadOnlyList<string> GitBashToolDirectories()
-    {
-        var bash = ProcessHarness.ResolveBashExecutable();
-        var bashDirectory = Path.GetDirectoryName(bash);
-        if (string.IsNullOrWhiteSpace(bashDirectory))
-        {
-            return [];
-        }
-
-        var parent = Path.GetDirectoryName(bashDirectory);
-        if (parent is not null &&
-            string.Equals(Path.GetFileName(bashDirectory), "bin", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(Path.GetFileName(parent), "usr", StringComparison.OrdinalIgnoreCase))
-        {
-            var usrBin = Path.Combine(parent, "usr", "bin");
-            if (Directory.Exists(usrBin))
-            {
-                return [usrBin, bashDirectory];
-            }
-        }
-
-        return [bashDirectory];
     }
 
     private static void AddPathEntry(ICollection<string> entries, string entry, StringComparer comparer)

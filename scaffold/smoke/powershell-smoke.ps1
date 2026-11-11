@@ -9,11 +9,14 @@
 param(
     [switch]$SkipBuild,
     [switch]$KeepTemp,
-    [string]$RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
+    [string]$RepositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path,
+    [string]$BootstrapScript = (Join-Path $RepositoryRoot "scaffold/build/bootstrap.ps1")
 )
 
 $ErrorActionPreference = "Stop"
 $ConfirmPreference = "None"
+
+$isWindowsHost = $PSVersionTable.PSEdition -eq "Desktop" -or $env:OS -eq "Windows_NT"
 
 if ($PSVersionTable.PSEdition -eq "Desktop") {
     $hostExecutable = Join-Path $PSHOME "powershell.exe"
@@ -272,12 +275,94 @@ function Add-SourceManagedEntry {
     [System.IO.File]::AppendAllText($lockPath, "managed $Relative $hash`n")
 }
 
+function New-FakeProbeExecutable {
+    param(
+        [string]$Directory,
+        [string]$Name,
+        [string]$VersionLine,
+        [int]$ExitCode
+    )
+    if ($script:isWindowsHost) {
+        $path = Join-Path $Directory ($Name + ".cmd")
+        $content = "@echo off`r`necho $VersionLine`r`nping -n 2 127.0.0.1 >nul`r`necho after-line`r`nexit /b $ExitCode`r`n"
+        [System.IO.File]::WriteAllText($path, $content)
+        return $path
+    }
+
+    $path = Join-Path $Directory ($Name + ".sh")
+    $content = "#!/usr/bin/env bash`necho $VersionLine`nsleep 0.3`necho after-line`nexit $ExitCode`n"
+    [System.IO.File]::WriteAllText($path, $content)
+    & chmod 755 $path
+    if ($LASTEXITCODE -ne 0) {
+        throw "powershell-smoke: could not mark the fake probe executable."
+    }
+    return $path
+}
+
 $temporary = Join-Path ([System.IO.Path]::GetTempPath()) ("plutonium-ps-smoke-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $temporary -Force | Out-Null
 $source = Join-Path $temporary "source"
 $consumer = Join-Path $temporary "consumer"
 
 try {
+    if (-not (Test-Path -LiteralPath $BootstrapScript -PathType Leaf)) {
+        throw "powershell-smoke: bootstrap script not found: $BootstrapScript"
+    }
+    . $BootstrapScript
+
+    # Get-PlutoniumProbe must capture the native output and exit code without
+    # piping the live process into Select-Object -First, which force-closes the
+    # process on Windows PowerShell 5.1 and records a false failure. Clearing
+    # LASTEXITCODE first keeps a stale value from masking a missed capture.
+    $probeSettings = Get-PlutoniumSdkSettings -GlobalJson (Join-Path $RepositoryRoot "global.json")
+    $probeDirectory = Join-Path $temporary "probe"
+    New-Item -ItemType Directory -Path $probeDirectory -Force | Out-Null
+
+    $successProbe = New-FakeProbeExecutable -Directory $probeDirectory -Name "probe-success" `
+        -VersionLine $probeSettings.Version -ExitCode 0
+    $global:LASTEXITCODE = $null
+    $successDiagnostics = $null
+    $successReported = Get-PlutoniumProbe -Executable $successProbe -ProbeDirectory $probeDirectory `
+        -PinnedVersion $probeSettings.Version -RollForward $probeSettings.RollForward `
+        -AllowPrerelease $probeSettings.AllowPrerelease -Diagnostics ([ref]$successDiagnostics)
+    if ($successReported -ne $probeSettings.Version) {
+        Fail-Smoke "Get-PlutoniumProbe did not return the reported SDK version (got '$successReported')."
+    }
+    if ($null -eq $successDiagnostics -or $successDiagnostics.ExitCode -ne 0 -or
+        $successDiagnostics.Reported -ne $probeSettings.Version) {
+        Fail-Smoke "Get-PlutoniumProbe reported a failure diagnostic for a successful probe."
+    }
+
+    $exitProbe = New-FakeProbeExecutable -Directory $probeDirectory -Name "probe-exit" `
+        -VersionLine $probeSettings.Version -ExitCode 3
+    $global:LASTEXITCODE = $null
+    $exitDiagnostics = $null
+    $exitReported = Get-PlutoniumProbe -Executable $exitProbe -ProbeDirectory $probeDirectory `
+        -PinnedVersion $probeSettings.Version -RollForward $probeSettings.RollForward `
+        -AllowPrerelease $probeSettings.AllowPrerelease -Diagnostics ([ref]$exitDiagnostics)
+    if ($null -ne $exitReported) {
+        Fail-Smoke "Get-PlutoniumProbe accepted a nonzero probe exit."
+    }
+    if ($null -eq $exitDiagnostics -or $exitDiagnostics.ExitCode -ne 3 -or
+        $exitDiagnostics.Reported -ne $probeSettings.Version) {
+        Fail-Smoke "Get-PlutoniumProbe did not capture the nonzero probe exit code and reported version."
+    }
+
+    $wrongProbe = New-FakeProbeExecutable -Directory $probeDirectory -Name "probe-wrong" `
+        -VersionLine "0.0.1" -ExitCode 0
+    $global:LASTEXITCODE = $null
+    $wrongDiagnostics = $null
+    $wrongReported = Get-PlutoniumProbe -Executable $wrongProbe -ProbeDirectory $probeDirectory `
+        -PinnedVersion $probeSettings.Version -RollForward $probeSettings.RollForward `
+        -AllowPrerelease $probeSettings.AllowPrerelease -Diagnostics ([ref]$wrongDiagnostics)
+    if ($null -ne $wrongReported) {
+        Fail-Smoke "Get-PlutoniumProbe accepted a version that does not satisfy the pin."
+    }
+    if ($null -eq $wrongDiagnostics -or $wrongDiagnostics.ExitCode -ne 0 -or
+        $wrongDiagnostics.Reported -ne "0.0.1") {
+        Fail-Smoke "Get-PlutoniumProbe did not capture the unsatisfied reported version."
+    }
+
     New-Item -ItemType Directory -Path $source -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $RepositoryRoot "scaffold") -Destination (Join-Path $source "scaffold") -Recurse -Force
     Copy-Item -LiteralPath (Join-Path $RepositoryRoot "init.ps1") -Destination (Join-Path $source "init.ps1") -Force
@@ -509,7 +594,6 @@ try {
 
     # On Linux, a fake cached toolchain can force the smoke build to fail and
     # prove that update.ps1 removes files introduced by the new lock.
-    $isWindowsHost = $PSVersionTable.PSEdition -eq "Desktop" -or $env:OS -eq "Windows_NT"
     if (-not $isWindowsHost) {
         $fakeDirectory = Join-Path $consumer "build/temp/dotnet-win"
         New-Item -ItemType Directory -Path $fakeDirectory -Force | Out-Null
@@ -555,7 +639,6 @@ exit 1
     if (-not $SkipBuild) {
         $feed = Join-Path $temporary "feed"
         New-Item -ItemType Directory -Path $feed -Force | Out-Null
-        . (Join-Path $RepositoryRoot "scaffold/build/bootstrap.ps1")
         $toolchain = Resolve-PlutoniumDotNet `
             -GlobalJson (Join-Path $RepositoryRoot "global.json") `
             -CacheDirectory (Join-Path $consumer "build/temp") `

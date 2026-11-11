@@ -13,4 +13,8 @@
     <IsTestProject>false</IsTestProject>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Plutonium.Sdk.Tests" />
+  </ItemGroup>
+
 </Project>
