@@ -200,7 +200,7 @@ public static class ProcessHarness
     /// <exception cref="InvalidOperationException">
     /// No usable Git Bash was found, or the configured path is the WSL stub.
     /// </exception>
-    private static string ResolveBashExecutable()
+    internal static string ResolveBashExecutable()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -358,7 +358,7 @@ public static class ProcessHarness
         candidates.Add(path);
     }
 
-    private static string ToBashPath(string value) =>
+    internal static string ToBashPath(string value) =>
         OperatingSystem.IsWindows()
             ? value.Replace('\\', '/')
             : value;

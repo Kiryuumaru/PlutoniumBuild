@@ -183,33 +183,41 @@ public sealed class FakeToolchain
         var content = builder.ToString().Replace("\r\n", "\n", StringComparison.Ordinal);
         var path = Path.Combine(ShimDirectory, name);
         File.WriteAllText(path, content);
-        if (!OperatingSystem.IsWindows())
-        {
-            File.SetUnixFileMode(
-                path,
-                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
-                UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
-                UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
-        }
+        MakeExecutable(path);
     }
 
-    /// <summary>Builds a PATH with the shims first and the standard Unix tool directories after.</summary>
-    /// <param name="includeExisting">Whether to append the current process PATH after the standard directories.</param>
+    /// <summary>
+    /// Builds a PATH with the shims first and the bash tool directories after.
+    /// Windows receives Win32-form entries because Git Bash converts a
+    /// semicolon-separated PATH; POSIX entries such as <c>/usr/bin</c> would be
+    /// treated as rooted Win32 paths and become <c>/c/usr/bin</c>.
+    /// </summary>
+    /// <param name="includeExisting">Whether to append the current process PATH after the tool directories.</param>
     /// <returns>The PATH value.</returns>
     public string BuildPath(bool includeExisting = true)
     {
-        var entries = new List<string> { ShimDirectory, "/usr/bin", "/bin" };
+        var windows = OperatingSystem.IsWindows();
+        var comparer = windows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var entries = new List<string> { ShimDirectory };
+        if (windows)
+        {
+            foreach (var directory in GitBashToolDirectories())
+            {
+                AddPathEntry(entries, directory, comparer);
+            }
+        }
+        else
+        {
+            AddPathEntry(entries, "/usr/bin", comparer);
+            AddPathEntry(entries, "/bin", comparer);
+        }
+
         var existing = Environment.GetEnvironmentVariable("PATH");
         if (includeExisting && !string.IsNullOrWhiteSpace(existing))
         {
             foreach (var entry in existing.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             {
-                if (entries.Contains(entry, StringComparer.Ordinal))
-                {
-                    continue;
-                }
-
-                entries.Add(entry);
+                AddPathEntry(entries, entry, comparer);
             }
         }
 
@@ -259,6 +267,75 @@ public sealed class FakeToolchain
     /// <summary>Reads the recorded shim invocations.</summary>
     /// <returns>One line per invocation, or an empty string when nothing ran.</returns>
     public string ReadLog() => File.Exists(LogPath) ? File.ReadAllText(LogPath) : string.Empty;
+
+    private void MakeExecutable(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+                UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+            return;
+        }
+
+        var result = ProcessHarness.RunAsync(
+                new ProcessRequest(
+                    ProcessHarness.ResolveBashExecutable(),
+                    [
+                        "-c",
+                        "chmod +x -- \"$1\" && test -x \"$1\"",
+                        "plutonium-shim",
+                        ProcessHarness.ToBashPath(path),
+                    ],
+                    Environment: new Dictionary<string, string?>(StringComparer.Ordinal)
+                    {
+                        ["PATH"] = BuildPath(),
+                    }))
+            .GetAwaiter()
+            .GetResult();
+        if (!result.Succeeded)
+        {
+            throw new InvalidOperationException(
+                "The fake tool shim '" + path + "' is not executable under Git Bash." +
+                Environment.NewLine + result.Describe());
+        }
+    }
+
+    private static IReadOnlyList<string> GitBashToolDirectories()
+    {
+        var bash = ProcessHarness.ResolveBashExecutable();
+        var bashDirectory = Path.GetDirectoryName(bash);
+        if (string.IsNullOrWhiteSpace(bashDirectory))
+        {
+            return [];
+        }
+
+        var parent = Path.GetDirectoryName(bashDirectory);
+        if (parent is not null &&
+            string.Equals(Path.GetFileName(bashDirectory), "bin", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(Path.GetFileName(parent), "usr", StringComparison.OrdinalIgnoreCase))
+        {
+            var usrBin = Path.Combine(parent, "usr", "bin");
+            if (Directory.Exists(usrBin))
+            {
+                return [usrBin, bashDirectory];
+            }
+        }
+
+        return [bashDirectory];
+    }
+
+    private static void AddPathEntry(ICollection<string> entries, string entry, StringComparer comparer)
+    {
+        if (entries.Contains(entry, comparer))
+        {
+            return;
+        }
+
+        entries.Add(entry);
+    }
 
     private static string ShellQuote(string value) =>
         "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";

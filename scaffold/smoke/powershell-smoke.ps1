@@ -109,6 +109,7 @@ function Get-RawBlobHash {
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($format)) {
         $format = "sha1"
     }
+    $global:LASTEXITCODE = 0
     $bytes = [System.IO.File]::ReadAllBytes($Path)
     $header = [System.Text.Encoding]::ASCII.GetBytes("blob " + $bytes.Length + [char]0)
     $payload = New-Object byte[] ($header.Length + $bytes.Length)
@@ -210,6 +211,7 @@ function Invoke-SmokeScript {
         try {
             $output = & $hostExecutable -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @Arguments 2>&1
             $exitCode = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
         }
         finally {
             $ErrorActionPreference = $previousErrorActionPreference
@@ -619,7 +621,9 @@ finally {
 }
 
 if ($failures -ne 0) {
-    throw "powershell-smoke: $failures failure(s)."
+    Write-Host "powershell-smoke: $failures failure(s)." -ForegroundColor Red
+    exit 1
 }
 
 Write-Host "powershell-smoke: ok"
+exit 0
