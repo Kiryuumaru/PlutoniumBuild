@@ -122,36 +122,19 @@ public sealed class RepositoryWorkflowPolicyTests
 
         using var document = JsonDocument.Parse(match.Groups["json"].Value);
         Assert.Equal(
-            ["include"],
+            ["os"],
             document.RootElement.EnumerateObject().Select(property => property.Name));
-        var include = document.RootElement.GetProperty("include");
-        Assert.Equal(JsonValueKind.Array, include.ValueKind);
-        var entries = include.EnumerateArray().Select(ReadMatrixEntry).ToList();
-        Assert.Equal(2, entries.Count);
+        var operatingSystems = document.RootElement.GetProperty("os");
+        Assert.Equal(JsonValueKind.Array, operatingSystems.ValueKind);
         Assert.Equal(
-            2,
-            entries.Select(entry => entry["os"]).Distinct(StringComparer.Ordinal).Count());
-
-        AssertMatrixEntry(
-            entries.Single(entry => entry["os"] == "ubuntu-latest"),
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["os"] = "ubuntu-latest",
-                ["build_command"] = "./build.sh",
-                ["build_shell"] = "bash",
-                ["smoke_shell"] = "pwsh",
-                ["smoke_script"] = "./scaffold/smoke/powershell-smoke.ps1 -SkipBuild",
-            });
-        AssertMatrixEntry(
-            entries.Single(entry => entry["os"] == "windows-latest"),
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["os"] = "windows-latest",
-                ["build_command"] = @".\build.cmd",
-                ["build_shell"] = "cmd",
-                ["smoke_shell"] = "powershell",
-                ["smoke_script"] = "./scaffold/smoke/powershell-smoke.ps1",
-            });
+            ["ubuntu-latest", "windows-latest"],
+            operatingSystems.EnumerateArray()
+                .Select(value =>
+                {
+                    Assert.Equal(JsonValueKind.String, value.ValueKind);
+                    return value.GetString() ?? string.Empty;
+                })
+                .ToList());
 
         Assert.Equal("matrix", Scalar(Get(workflow.Step("pre-setup", "Compute matrix"), "id")));
         Assert.Contains("echo \"matrix=$matrix\" >> \"$GITHUB_OUTPUT\"", matrixRun, StringComparison.Ordinal);
@@ -163,18 +146,40 @@ public sealed class RepositoryWorkflowPolicyTests
 
         AssertMatrixConsumer(workflow, "scaffold-smoke");
         AssertMatrixConsumer(workflow, "test");
-        AssertMatrixStep(
+        Assert.Equal(
+            ["Check out", "Run PowerShell scaffold smoke (Ubuntu)", "Run PowerShell scaffold smoke (Windows)"],
+            workflow.StepNames("scaffold-smoke"));
+        AssertStaticStep(
             workflow,
             "scaffold-smoke",
-            "Run PowerShell scaffold smoke",
-            "${{ matrix.smoke_shell }}",
-            "${{ matrix.smoke_script }}");
-        AssertMatrixStep(
+            "Run PowerShell scaffold smoke (Ubuntu)",
+            "runner.os == 'Linux'",
+            "pwsh",
+            "./scaffold/smoke/powershell-smoke.ps1 -SkipBuild");
+        AssertStaticStep(
+            workflow,
+            "scaffold-smoke",
+            "Run PowerShell scaffold smoke (Windows)",
+            "runner.os == 'Windows'",
+            "powershell",
+            "./scaffold/smoke/powershell-smoke.ps1");
+        Assert.Equal(
+            ["Check out", "Build and test (Ubuntu)", "Build and test (Windows)"],
+            workflow.StepNames("test"));
+        AssertStaticStep(
             workflow,
             "test",
-            "Build and test",
-            "${{ matrix.build_shell }}",
-            "${{ matrix.build_command }}");
+            "Build and test (Ubuntu)",
+            "runner.os == 'Linux'",
+            "bash",
+            "./build.sh");
+        AssertStaticStep(
+            workflow,
+            "test",
+            "Build and test (Windows)",
+            "runner.os == 'Windows'",
+            "cmd",
+            @".\build.cmd");
     }
 
     /// <summary>
@@ -557,6 +562,48 @@ public sealed class RepositoryWorkflowPolicyTests
         AssertCheckouts(publish, 1, expectedRef: "refs/heads/main");
     }
 
+    /// <summary>
+    /// Verifies every workflow keeps <c>shell</c> static and free of expression
+    /// contexts, and that scalar job controls never inject contexts. A dynamic
+    /// shell is resolved before the job starts on GitHub Actions, so a matrix
+    /// expression there fails the workflow at load time.
+    /// </summary>
+    [Fact]
+    public void RepositoryWorkflows_UseStaticShellAndScalarJobControls()
+    {
+        var workflowDirectory = Path.Combine(
+            RepositoryLayout.Locate().Root,
+            ".github",
+            "workflows");
+        var paths = Directory
+            .EnumerateFiles(workflowDirectory, "*.yml", SearchOption.TopDirectoryOnly)
+            .Concat(Directory.EnumerateFiles(workflowDirectory, "*.yaml", SearchOption.TopDirectoryOnly))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+        Assert.NotEmpty(paths);
+
+        foreach (var path in paths)
+        {
+            var workflow = WorkflowDocument.LoadPath(path);
+            foreach (var key in new[] { "shell", "continue-on-error", "timeout-minutes", "working-directory" })
+            {
+                foreach (var mapping in workflow.AllMappings())
+                {
+                    if (!workflow.Has(key, mapping))
+                    {
+                        continue;
+                    }
+
+                    var value = Assert.IsType<YamlScalarNode>(Get(mapping, key));
+                    Assert.DoesNotContain(
+                        "${{",
+                        value.Value ?? string.Empty,
+                        StringComparison.Ordinal);
+                }
+            }
+        }
+    }
+
     private static void AssertMatrixConsumer(WorkflowDocument workflow, string jobId)
     {
         var job = workflow.Job(jobId);
@@ -567,16 +614,18 @@ public sealed class RepositoryWorkflowPolicyTests
         Assert.Equal(["pre-setup"], ReadStringList(Get(job, "needs")));
     }
 
-    private static void AssertMatrixStep(
+    private static void AssertStaticStep(
         WorkflowDocument workflow,
         string jobId,
         string stepName,
-        string expectedShell,
-        string expectedRun)
+        string condition,
+        string shell,
+        string run)
     {
         var step = workflow.Step(jobId, stepName);
-        Assert.Equal(expectedShell, Scalar(Get(step, "shell")));
-        Assert.Equal(expectedRun, Scalar(Get(step, "run")));
+        Assert.Equal(condition, NormalizeExpression(Scalar(Get(step, "if"))));
+        Assert.Equal(shell, Scalar(Get(step, "shell")));
+        Assert.Equal(run, Scalar(Get(step, "run")));
     }
 
     private static void AssertCheckouts(
@@ -607,31 +656,6 @@ public sealed class RepositoryWorkflowPolicyTests
                 workflow.Has("permissions", workflow.Job(jobId)),
                 "Job '" + jobId + "' must not override the read-only default permissions.");
         }
-    }
-
-    private static void AssertMatrixEntry(
-        IReadOnlyDictionary<string, string> actual,
-        IReadOnlyDictionary<string, string> expected)
-    {
-        Assert.Equal(expected.Count, actual.Count);
-        foreach (var pair in expected)
-        {
-            Assert.True(actual.TryGetValue(pair.Key, out var value), "Missing matrix key '" + pair.Key + "'.");
-            Assert.Equal(pair.Value, value);
-        }
-    }
-
-    private static IReadOnlyDictionary<string, string> ReadMatrixEntry(JsonElement entry)
-    {
-        Assert.Equal(JsonValueKind.Object, entry.ValueKind);
-        var values = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var property in entry.EnumerateObject())
-        {
-            Assert.Equal(JsonValueKind.String, property.Value.ValueKind);
-            values[property.Name] = property.Value.GetString() ?? string.Empty;
-        }
-
-        return values;
     }
 
     private static async Task<ProcessResult> RunPostSetupAsync(
@@ -753,13 +777,15 @@ public sealed class RepositoryWorkflowPolicyTests
 
         public IEnumerable<YamlMappingNode> AllMappings() => CollectMappings(Root);
 
-        public static WorkflowDocument Load(string fileName)
-        {
-            var path = Path.Combine(
+        public static WorkflowDocument Load(string fileName) =>
+            LoadPath(Path.Combine(
                 RepositoryLayout.Locate().Root,
                 ".github",
                 "workflows",
-                fileName);
+                fileName));
+
+        public static WorkflowDocument LoadPath(string path)
+        {
             var text = File.ReadAllText(path).Replace("\r\n", "\n", StringComparison.Ordinal);
             var stream = new YamlStream();
             using var reader = new StringReader(text);
