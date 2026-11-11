@@ -144,7 +144,6 @@ reject_unsafe_source_paths() {
 normalize_line_endings() {
     local root="$1" file temporary
     while IFS= read -r -d '' file; do
-        grep -q $'\r' "$file" || continue
         temporary=$(mktemp "$(dirname "$file")/.plutonium-lf.XXXXXXXX") || return 1
         if ! cp -p "$file" "$temporary" || ! tr -d '\r' < "$file" > "$temporary"; then
             rm -f -- "$temporary"
@@ -764,7 +763,7 @@ run_smoke() {
         # rollback trap before the smoke build can fail or be interrupted.
         _install_finish_trap
         "$PLUTONIUM_DOTNET_EXE" build "$project" \
-            /nodeReuse:false /p:UseSharedCompilation=false -nologo -clp:NoSummary --verbosity quiet
+            -nodeReuse:false -p:UseSharedCompilation=false -nologo -clp:NoSummary --verbosity quiet
         return $?
     fi
 

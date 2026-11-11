@@ -21,6 +21,6 @@ fi
 cd "$REPO_ROOT"
 
 "$PLUTONIUM_DOTNET_EXE" build "$BUILD_DIR/build.csproj" \
-    /nodeReuse:false /p:UseSharedCompilation=false -nologo -clp:NoSummary --verbosity quiet
+    -nodeReuse:false -p:UseSharedCompilation=false -nologo -clp:NoSummary --verbosity quiet
 
 exec "$PLUTONIUM_DOTNET_EXE" run --project "$BUILD_DIR/build.csproj" --no-build -- "$@"

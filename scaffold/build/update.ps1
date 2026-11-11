@@ -20,6 +20,26 @@ function Stop-Update {
     throw $Message
 }
 
+function Invoke-NativeCommand {
+    param(
+        [string]$FilePath,
+        [string[]]$Arguments
+    )
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & $FilePath @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    [pscustomobject]@{
+        Output = @($output)
+        ExitCode = $exitCode
+    }
+}
+
 function Get-LockValue {
     param([string]$Path, [string]$Key)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -329,25 +349,27 @@ function Restore-Backup {
 
 try {
     New-Item -ItemType Directory -Path $fetchDirectory -Force | Out-Null
-    & git -C $fetchDirectory init -q
-    if ($LASTEXITCODE -ne 0) { Stop-Update "build/update.ps1: git init failed." }
+    $result = Invoke-NativeCommand -FilePath git -Arguments @("-C", $fetchDirectory, "init", "-q")
+    if ($result.ExitCode -ne 0) { Stop-Update "build/update.ps1: git init failed." }
     # Git for Windows defaults to core.autocrlf=true; the lock records LF hashes.
-    & git -C $fetchDirectory config core.autocrlf false
-    if ($LASTEXITCODE -ne 0) { Stop-Update "build/update.ps1: git config failed." }
-    & git -C $fetchDirectory config core.eol lf
-    if ($LASTEXITCODE -ne 0) { Stop-Update "build/update.ps1: git config failed." }
-    & git -C $fetchDirectory remote add origin $Source
-    if ($LASTEXITCODE -ne 0) { Stop-Update "build/update.ps1: git remote add failed." }
+    $result = Invoke-NativeCommand -FilePath git -Arguments @("-C", $fetchDirectory, "config", "core.autocrlf", "false")
+    if ($result.ExitCode -ne 0) { Stop-Update "build/update.ps1: git config failed." }
+    $result = Invoke-NativeCommand -FilePath git -Arguments @("-C", $fetchDirectory, "config", "core.eol", "lf")
+    if ($result.ExitCode -ne 0) { Stop-Update "build/update.ps1: git config failed." }
+    $result = Invoke-NativeCommand -FilePath git -Arguments @("-C", $fetchDirectory, "remote", "add", "origin", $Source)
+    if ($result.ExitCode -ne 0) { Stop-Update "build/update.ps1: git remote add failed." }
 
     $env:GIT_TERMINAL_PROMPT = "0"
-    $fetchOutput = & git -C $fetchDirectory fetch --depth 1 --no-tags origin $Sha 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Stop-Update "build/update.ps1: could not fetch commit $Sha from $Source.`n$($fetchOutput -join [Environment]::NewLine)"
+    $result = Invoke-NativeCommand -FilePath git -Arguments @("-C", $fetchDirectory, "fetch", "--depth", "1", "--no-tags", "origin", $Sha)
+    if ($result.ExitCode -ne 0) {
+        Stop-Update "build/update.ps1: could not fetch commit $Sha from $Source.`n$($result.Output -join [Environment]::NewLine)"
     }
-    & git -C $fetchDirectory checkout -q --detach FETCH_HEAD
-    if ($LASTEXITCODE -ne 0) { Stop-Update "build/update.ps1: could not check out commit $Sha." }
+    $result = Invoke-NativeCommand -FilePath git -Arguments @("-C", $fetchDirectory, "checkout", "-q", "--detach", "FETCH_HEAD")
+    if ($result.ExitCode -ne 0) { Stop-Update "build/update.ps1: could not check out commit $Sha." }
 
-    $headSha = (& git -C $fetchDirectory rev-parse HEAD).Trim()
+    $result = Invoke-NativeCommand -FilePath git -Arguments @("-C", $fetchDirectory, "rev-parse", "HEAD")
+    if ($result.ExitCode -ne 0) { Stop-Update "build/update.ps1: git rev-parse failed." }
+    $headSha = ($result.Output -join "`n").Trim()
     if ($headSha -ne $Sha) {
         Stop-Update "build/update.ps1: fetched $headSha but expected $Sha."
     }
@@ -631,16 +653,16 @@ try {
                         -CacheDirectory (Join-Path $BuildDirectory "temp") `
                         -LockFile $LockFile
                     $buildArguments = @($project, "/nodeReuse:false", "/p:UseSharedCompilation=false", "-nologo", "-clp:NoSummary", "--verbosity", "quiet")
-                    & $toolchain.Exe build @buildArguments
-                    if ($LASTEXITCODE -ne 0) { $smokeFailed = $true }
+                    $result = Invoke-NativeCommand -FilePath $toolchain.Exe -Arguments (@("build") + $buildArguments)
+                    if ($result.ExitCode -ne 0) { $smokeFailed = $true }
                 }
                 catch {
                     $smokeFailed = $true
                 }
             }
             elseif (Get-Command dotnet -ErrorAction SilentlyContinue) {
-                & dotnet msbuild $project -getProperty:TargetFramework -nologo | Out-Null
-                if ($LASTEXITCODE -ne 0) { $smokeFailed = $true }
+                $result = Invoke-NativeCommand -FilePath dotnet -Arguments @("msbuild", $project, "-getProperty:TargetFramework", "-nologo")
+                if ($result.ExitCode -ne 0) { $smokeFailed = $true }
             }
             else {
                 Write-Warning "PlutoniumBuild: smoke test skipped (no restored assets and no dotnet on PATH)."

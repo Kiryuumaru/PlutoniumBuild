@@ -17,7 +17,7 @@ plutonium_bootstrap \
 cd "$ROOT"
 
 "$PLUTONIUM_DOTNET_EXE" build PlutoniumBuild.sln \
-    /nodeReuse:false /p:UseSharedCompilation=false -nologo -clp:NoSummary --verbosity quiet
+    -nodeReuse:false -p:UseSharedCompilation=false -nologo -clp:NoSummary --verbosity quiet
 
 # The test matrix targets net8.0/net9.0/net10.0. LatestMajor lets every target
 # execute on the pinned SDK's runtime when the host has no older runtimes.
