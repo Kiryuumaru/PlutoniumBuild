@@ -163,27 +163,48 @@ function Get-PlutoniumProbe {
         [Parameter(Mandatory = $true)][string]$ProbeDirectory,
         [Parameter(Mandatory = $true)][string]$PinnedVersion,
         [Parameter(Mandatory = $true)][string]$RollForward,
-        [Parameter(Mandatory = $true)][bool]$AllowPrerelease
+        [Parameter(Mandatory = $true)][bool]$AllowPrerelease,
+        [ref]$Diagnostics
     )
 
+    $detail = [pscustomobject]@{
+        Executable = $Executable
+        ExitCode = $null
+        Reported = $null
+        Output = $null
+    }
+    if ($null -ne $Diagnostics) {
+        $Diagnostics.Value = $detail
+    }
+
     if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
+        $detail.Output = "executable not found"
         return $null
     }
 
     Push-Location -LiteralPath $ProbeDirectory
     try {
-        $reported = (& $Executable --version 2>$null | Select-Object -First 1)
+        $output = & $Executable --version 2>$null
         $exitCode = $LASTEXITCODE
     }
     finally {
         Pop-Location
     }
 
+    $reported = [string]($output | Select-Object -First 1)
+    $excerpt = (@($output) -join " ").Trim()
+    if ($excerpt.Length -gt 200) {
+        $excerpt = $excerpt.Substring(0, 200) + "..."
+    }
+    $detail.ExitCode = $exitCode
+    $detail.Reported = $reported
+    $detail.Output = $excerpt
+
     if ($exitCode -ne 0 -or [string]::IsNullOrWhiteSpace($reported)) {
         return $null
     }
 
-    $reported = ([string]$reported).Trim()
+    $reported = $reported.Trim()
     if (-not (Test-PlutoniumVersionSatisfies -Actual $reported -Pinned $PinnedVersion -RollForward $RollForward -AllowPrerelease $AllowPrerelease)) {
         return $null
     }
@@ -281,10 +302,13 @@ function Resolve-PlutoniumDotNet {
         }
 
         if (Test-Path -LiteralPath (Join-Path $installDirectory "dotnet.exe") -PathType Leaf) {
+            $probeDiagnostics = $null
             $reported = Get-PlutoniumProbe -Executable $cacheExecutable -ProbeDirectory $probeDirectory `
-                -PinnedVersion $pinnedVersion -RollForward $rollForward -AllowPrerelease $allowPrerelease
+                -PinnedVersion $pinnedVersion -RollForward $rollForward -AllowPrerelease $allowPrerelease `
+                -Diagnostics ([ref]$probeDiagnostics)
             if ($null -eq $reported) {
-                throw "The installer produced a dotnet that does not satisfy SDK $pinnedVersion."
+                $probeExit = if ($null -eq $probeDiagnostics.ExitCode) { "not run" } else { $probeDiagnostics.ExitCode }
+                throw "The installer produced a dotnet that does not satisfy SDK $pinnedVersion. Probe '$($probeDiagnostics.Executable)' exit: $probeExit; reported version: '$($probeDiagnostics.Reported)'; output: '$($probeDiagnostics.Output)'."
             }
 
             return Set-PlutoniumToolchain -Executable $cacheExecutable -Version $reported
@@ -326,10 +350,13 @@ function Resolve-PlutoniumDotNet {
         $extractDirectory = Join-Path $temporaryDirectory "extract"
         Expand-Archive -LiteralPath $archivePath -DestinationPath $extractDirectory -Force
         $extractedDotNet = Join-Path $extractDirectory "dotnet.exe"
+        $probeDiagnostics = $null
         $reported = Get-PlutoniumProbe -Executable $extractedDotNet -ProbeDirectory $probeDirectory `
-            -PinnedVersion $pinnedVersion -RollForward $rollForward -AllowPrerelease $allowPrerelease
+            -PinnedVersion $pinnedVersion -RollForward $rollForward -AllowPrerelease $allowPrerelease `
+            -Diagnostics ([ref]$probeDiagnostics)
         if ($null -eq $reported) {
-            throw "The verified .NET SDK archive does not report SDK $pinnedVersion."
+            $probeExit = if ($null -eq $probeDiagnostics.ExitCode) { "not run" } else { $probeDiagnostics.ExitCode }
+            throw "The verified .NET SDK archive does not report SDK $pinnedVersion. Probe '$($probeDiagnostics.Executable)' exit: $probeExit; reported version: '$($probeDiagnostics.Reported)'; output: '$($probeDiagnostics.Output)'."
         }
 
         if (Test-Path -LiteralPath $installDirectory) {
