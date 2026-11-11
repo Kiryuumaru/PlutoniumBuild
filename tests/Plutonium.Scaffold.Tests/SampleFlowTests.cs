@@ -28,7 +28,11 @@ public sealed class SampleFlowTests
         Assert.Contains("Terminal", text, StringComparison.Ordinal);
     }
 
-    /// <summary>A non-C# consumer can run Test, Build, and Publish through the package.</summary>
+    /// <summary>
+    /// A non-C# consumer can run Test, Build, and Publish through the package,
+    /// and a stale update journal under <c>build/temp</c> is not compiled into
+    /// the build app.
+    /// </summary>
     [Fact]
     public async Task SampleFlow_RunsTestBuildPublish()
     {
@@ -50,6 +54,22 @@ public sealed class SampleFlowTests
 
         var init = await ScaffoldTestContext.RunInitAsync(source, target);
         ScaffoldTestContext.AssertSucceeded(init, "init");
+
+        // An update journals the previous scaffold files under
+        // build/temp/update/<stamp>/files; the build project must not compile
+        // that journal copy alongside the live build definition.
+        var journal = Path.Combine(
+            target.RootPath,
+            "build",
+            "temp",
+            "update",
+            "20260101T000000Z",
+            "files",
+            "build");
+        Directory.CreateDirectory(journal);
+        File.Copy(
+            Path.Combine(target.RootPath, "build", "build.cs"),
+            Path.Combine(journal, "build.cs"));
 
         File.WriteAllText(
             Path.Combine(target.RootPath, "NuGet.config"),

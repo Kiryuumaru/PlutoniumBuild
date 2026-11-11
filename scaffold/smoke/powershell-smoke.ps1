@@ -455,7 +455,13 @@ try {
     $lockText = Get-Content -LiteralPath (Join-Path $consumer "build/plutonium.lock") -Raw
     if ($lockText -match "secret-token") { Fail-Smoke "installed lock contains a credential." }
 
-    Add-Content -LiteralPath (Join-Path $consumer "build/build.cs") -Value "# consumer sentinel"
+    # The build app resolves HEAD for its run identity, so the consumer must be
+    # a committed repository before the build step runs.
+    & git -C $consumer add -A
+    & git -C $consumer commit -qm "consumer baseline"
+    if ($LASTEXITCODE -ne 0) { throw "powershell-smoke: consumer commit failed." }
+
+    Add-Content -LiteralPath (Join-Path $consumer "build/build.cs") -Value "// consumer sentinel"
     Add-Content -LiteralPath (Join-Path $consumer "build/Program.cs") -Value "// consumer sentinel"
     $preservedProgram = Join-Path $consumer "build/Program.cs"
     $preservedHash = (Get-FileHash -LiteralPath $preservedProgram -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -485,6 +491,9 @@ try {
     }
     if ((Get-FileHash -LiteralPath $preservedProgram -Algorithm SHA256).Hash.ToLowerInvariant() -ne $preservedHash) {
         Fail-Smoke "update overwrote a preserved file."
+    }
+    if (-not (Select-String -LiteralPath (Join-Path $consumer "build/build.cs") -Pattern "// consumer sentinel" -Quiet)) {
+        Fail-Smoke "update overwrote a preserved build definition."
     }
     $installedLock = Get-Content -LiteralPath (Join-Path $consumer "build/plutonium.lock") -Raw
     if ($installedLock -notmatch "managed build/Program\.cs $preservedHash") {
