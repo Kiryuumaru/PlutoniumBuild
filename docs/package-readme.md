@@ -19,11 +19,10 @@ The scaffold installs a small `build/` app, the root launchers, and the update
 tooling. Run this from the repository you want to build:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.sh | bash -s -- --sha <release-sha>
+curl -fsSL https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.sh | bash -s -- --sha 6aec14937739661d9c24affffaa6c8928c1f2655
 ```
 
-Replace every `<release-sha>` placeholder with the same full 40-character release
-commit SHA. The source repository must be public and that commit must exist. The
+The source repository must be public and the pinned commit must exist. The
 installer also needs `git` on `PATH` and refuses to overwrite an existing
 `build/` or conflicting root `build.sh` / `build.ps1` / `build.cmd`. If you
 override the default with `--source` (`-Source`), use a credential-free URL: the
@@ -32,7 +31,7 @@ installer rejects userinfo, query strings, and fragments.
 To inspect the script first, download it to `init.sh.new`:
 
 ```bash
-rm -f init.sh.new && curl -fsSL -o init.sh.new https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.sh
+rm -f init.sh.new && curl -fsSL -o init.sh.new https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.sh
 ```
 
 Download to a fresh file. Do not run a leftover `init.sh.new` from an earlier
@@ -41,14 +40,14 @@ attempt.
 Inspect `init.sh.new`, then run it:
 
 ```bash
-mv init.sh.new init.sh && bash init.sh --sha <release-sha>
+mv init.sh.new init.sh && bash init.sh --sha 6aec14937739661d9c24affffaa6c8928c1f2655
 ```
 
 On Windows PowerShell:
 
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.ps1 -OutFile init.ps1 -ErrorAction Stop
-powershell -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -Sha <release-sha>
+Invoke-WebRequest https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.ps1 -OutFile init.ps1 -ErrorAction Stop
+powershell -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -Sha 6aec14937739661d9c24affffaa6c8928c1f2655
 ```
 
 Download to a fresh file. Do not run an `init.ps1` left over from an earlier
@@ -100,10 +99,10 @@ installs the SDK pinned in `build/global.json` under `build/temp` when no usable
 ## Update
 
 ```bash
-build/update.sh --sha <release-sha>
+build/update.sh --sha 6aec14937739661d9c24affffaa6c8928c1f2655
 ```
 
-On Windows, use `build\update.cmd -Sha <release-sha>`. The updater applies the
+On Windows, use `build\update.cmd -Sha 6aec14937739661d9c24affffaa6c8928c1f2655`. The updater applies the
 same source checks as the installer, replaces managed files, and bumps the
 `PlutoniumBuild` package pin. It preserves `build/build.cs`,
 `build/Directory.Build.props`, `build/Directory.Build.targets`, and

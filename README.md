@@ -4,7 +4,7 @@ Build automation for any repository. Describe test, build, and publish steps in 
 
 > Status: **0.1.0 distribution landed.** The engine, author layer, CLI, the single `PlutoniumBuild` package, and the scaffold installer/updater are built. `samples/` remains **planned**.
 >
-> **Release gate:** the repository is currently private and the 0.1.0 distribution is not published. The one-line installer only works after the repository is public and a release commit is published. `dotnet add package PlutoniumBuild` only works after the 0.1.0 package is published to nuget.org through the manual publish workflow; publishing does not require the repository to be public. The commands below use `<release-sha>` as the placeholder for that full 40-character commit SHA.
+> **Release gate:** the repository is currently private and the 0.1.0 distribution is not published. The one-line installer only works after the repository is public and a release commit is published. `dotnet add package PlutoniumBuild` only works after the 0.1.0 package is published to nuget.org through the manual publish workflow; publishing does not require the repository to be public. The commands below pin that full 40-character commit SHA.
 
 **AI agents:** start with [INIT.md](INIT.md) for the install, run, CI, and update steps.
 
@@ -20,13 +20,13 @@ Build automation for any repository. Describe test, build, and publish steps in 
 Run the installer from the repository you want to build. This one line downloads the installer from the release commit and runs it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.sh | bash -s -- --sha <release-sha>
+curl -fsSL https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.sh | bash -s -- --sha 6aec14937739661d9c24affffaa6c8928c1f2655
 ```
 
 Prefer to inspect the script before running it? Download it to `init.sh.new` first:
 
 ```bash
-rm -f init.sh.new && curl -fsSL -o init.sh.new https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.sh
+rm -f init.sh.new && curl -fsSL -o init.sh.new https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.sh
 ```
 
 Download to a fresh file. Do not run a leftover `init.sh.new` from an earlier attempt.
@@ -34,21 +34,21 @@ Download to a fresh file. Do not run a leftover `init.sh.new` from an earlier at
 Inspect `init.sh.new`, then run it:
 
 ```bash
-mv init.sh.new init.sh && bash init.sh --sha <release-sha>
+mv init.sh.new init.sh && bash init.sh --sha 6aec14937739661d9c24affffaa6c8928c1f2655
 ```
 
 On Windows PowerShell:
 
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.ps1 -OutFile init.ps1 -ErrorAction Stop
-powershell -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -Sha <release-sha>
+Invoke-WebRequest https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.ps1 -OutFile init.ps1 -ErrorAction Stop
+powershell -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -Sha 6aec14937739661d9c24affffaa6c8928c1f2655
 ```
 
 Download to a fresh file. Do not run an `init.ps1` left over from an earlier attempt.
 
 Before you run it:
 
-- The source repository must be public and the `<release-sha>` must be a published release commit. Both are release-gated.
+- The source repository must be public and the release commit `6aec14937739661d9c24affffaa6c8928c1f2655` must be published. Both are release-gated.
 - `git` must be on `PATH`.
 - Run the installer from the target repository root.
 - The target must not already have a `build/` directory or a root `build.sh`, `build.ps1`, or `build.cmd`. Move existing files aside first.
@@ -97,10 +97,10 @@ The launcher reads `build/global.json` (SDK `10.0.402`) and installs that SDK un
 ## Update the scaffold
 
 ```bash
-build/update.sh --sha <release-sha>
+build/update.sh --sha 6aec14937739661d9c24affffaa6c8928c1f2655
 ```
 
-On Windows, use `build\update.cmd -Sha <release-sha>`.
+On Windows, use `build\update.cmd -Sha 6aec14937739661d9c24affffaa6c8928c1f2655`.
 
 The updater fetches and verifies the pinned commit and applies the same source checks as the installer. It replaces managed files and bumps the `PlutoniumBuild` package pin. It preserves `build/build.cs`, `build/Directory.Build.props`, `build/Directory.Build.targets`, and `build/build.slnx`, and never touches your root solution. It journals every affected path under `build/temp/update/<stamp>`; if apply or the smoke build fails, it restores replaced files and removes files introduced by the new lock.
 
