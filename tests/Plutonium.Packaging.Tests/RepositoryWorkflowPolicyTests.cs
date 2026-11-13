@@ -10,13 +10,16 @@ namespace Plutonium.Packaging.Tests;
 /// <summary>
 /// Pins the repository's own CI and publish workflow policy: the exact check
 /// names and trigger scope, the scaffold checks, the computed matrix and its
-/// consumers, the Post Setup result gate, read-only default permissions,
-/// immutable action refs, the manual publish confirmation, the published-version
-/// probe, and the step-scoped API-key push.
+/// consumers, the Post Setup result gate, read-only default permissions with a
+/// job-scoped OIDC elevation, immutable action refs, the manual publish
+/// confirmation, the published-version probe, and the step-scoped OIDC key push.
 /// </summary>
 public sealed class RepositoryWorkflowPolicyTests
 {
     private const string CheckoutAction = "actions/checkout@11d5960a326750d5838078e36cf38b85af677262";
+
+    private const string NuGetLoginAction =
+        "NuGet/login@8d196754b4036150537f80ac539e15c2f1028841";
 
     private static readonly string[] RequiredCiJobs = ["pre-setup", "scaffold-smoke", "test"];
 
@@ -314,7 +317,12 @@ public sealed class RepositoryWorkflowPolicyTests
             workflow.Has("needs", workflow.Job("publish")),
             "The publish job must not wait on a job that can bypass the confirm gate.");
 
-        AssertReadOnlyDefaultPermissions(workflow);
+        var login = workflow.Step("publish", "NuGet login (OIDC)");
+        Assert.Equal(
+            workflow.JobCondition("publish"),
+            NormalizeExpression(Scalar(Get(login, "if"))));
+
+        AssertPublishJobPermissions(workflow);
         var concurrency = workflow.Mapping(workflow.Root, "concurrency");
         Assert.Equal("publish-nuget", Scalar(Get(concurrency, "group")));
         Assert.Equal("false", Scalar(Get(concurrency, "cancel-in-progress")));
@@ -331,8 +339,7 @@ public sealed class RepositoryWorkflowPolicyTests
         var scalars = workflow.AllScalars().ToList();
         foreach (var forbidden in new[]
                  {
-                     "id-token",
-                     "NuGet/login",
+                     "NUGET_AUTH_TOKEN",
                      "NUGET_USER",
                      "nuget.pkg.github.com",
                      "GITHUB_TOKEN",
@@ -349,8 +356,8 @@ public sealed class RepositoryWorkflowPolicyTests
 
     /// <summary>
     /// Verifies the resolved package version is read once and shared by the
-    /// version-exists guard and the push, that the guard runs first, and that the
-    /// API-key secret is scoped to the push step.
+    /// version-exists guard and the push, that the guard runs before the OIDC
+    /// login, and that the short-lived key is scoped to the push step.
     /// </summary>
     [Fact]
     public void PublishWorkflow_ScopesApiKeyToPushAndReusesResolvedVersion()
@@ -360,11 +367,13 @@ public sealed class RepositoryWorkflowPolicyTests
         var versionIndex = stepNames.IndexOf("Read package version");
         var packIndex = stepNames.IndexOf("Pack");
         var guardIndex = stepNames.IndexOf("Refuse to republish an existing version");
+        var loginIndex = stepNames.IndexOf("NuGet login (OIDC)");
         var pushIndex = stepNames.IndexOf("Push");
         Assert.True(versionIndex >= 0, "Read package version step is missing.");
         Assert.True(packIndex >= 0 && versionIndex > packIndex, "The package must be packed before its version is read.");
         Assert.True(guardIndex > versionIndex, "The version guard must run after the version is read.");
-        Assert.True(pushIndex > guardIndex, "The version guard must run before the push.");
+        Assert.True(loginIndex > guardIndex, "The version guard must run before the OIDC login.");
+        Assert.True(pushIndex > loginIndex, "The OIDC login must run before the push.");
 
         const string packageProject = "src/PlutoniumBuild.Package/PlutoniumBuild.Package.csproj";
         var version = workflow.Step("publish", "Read package version");
@@ -386,8 +395,17 @@ public sealed class RepositoryWorkflowPolicyTests
         Assert.Equal("${{ steps.version.outputs.version }}", pushEnvironment["VERSION"]);
         Assert.Equal(2, pushEnvironment.Count);
         Assert.Equal(
-            "${{ secrets.NUGET_AUTH_TOKEN }}",
-            pushEnvironment["NUGET_AUTH_TOKEN"]);
+            "${{ steps.nuget_login.outputs.NUGET_API_KEY }}",
+            pushEnvironment["NUGET_API_KEY"]);
+        Assert.DoesNotContain("NUGET_AUTH_TOKEN", pushEnvironment.Keys);
+        Assert.DoesNotContain(
+            pushEnvironment.Values,
+            value => value.Contains("secrets.", StringComparison.Ordinal));
+
+        var tokenReferences = workflow.AllScalars()
+            .Where(value => value.Contains("steps.nuget_login.outputs.NUGET_API_KEY", StringComparison.Ordinal))
+            .ToList();
+        Assert.Equal(["${{ steps.nuget_login.outputs.NUGET_API_KEY }}"], tokenReferences);
 
         Assert.Equal(
             ["Refuse to republish an existing version", "Push"],
@@ -408,14 +426,16 @@ public sealed class RepositoryWorkflowPolicyTests
             "\"$DOTNET_EXE\" nuget push \"artifacts/PlutoniumBuild.${VERSION}.nupkg\"",
             pushRun,
             StringComparison.Ordinal);
-        Assert.Contains("--api-key \"$NUGET_AUTH_TOKEN\"", pushRun, StringComparison.Ordinal);
+        Assert.Contains("--api-key \"$NUGET_API_KEY\"", pushRun, StringComparison.Ordinal);
+        Assert.Contains("if [ -z \"${NUGET_API_KEY:-}\" ]; then", pushRun, StringComparison.Ordinal);
+        Assert.Contains("NUGET_API_KEY is not configured.", pushRun, StringComparison.Ordinal);
         Assert.Contains("--source https://api.nuget.org/v3/index.json", pushRun, StringComparison.Ordinal);
         Assert.Contains("--no-symbols", pushRun, StringComparison.Ordinal);
 
         var secrets = workflow.AllScalars()
             .Where(value => value.Contains("secrets.", StringComparison.Ordinal))
             .ToList();
-        Assert.Equal(["${{ secrets.NUGET_AUTH_TOKEN }}"], secrets);
+        Assert.Empty(secrets);
     }
 
     /// <summary>
@@ -499,12 +519,12 @@ public sealed class RepositoryWorkflowPolicyTests
             {
                 ["VERSION"] = "9.9.9",
                 ["DOTNET_EXE"] = "dotnet",
-                ["NUGET_AUTH_TOKEN"] = null,
+                ["NUGET_API_KEY"] = null,
             }));
 
         Assert.Equal(1, result.ExitCode);
         Assert.Contains(
-            "::error::NUGET_AUTH_TOKEN is not configured.",
+            "::error::NUGET_API_KEY is not configured.",
             result.StandardOutput,
             StringComparison.Ordinal);
         Assert.Equal(string.Empty, toolchain.ReadLog());
@@ -534,7 +554,7 @@ public sealed class RepositoryWorkflowPolicyTests
             {
                 ["VERSION"] = "9.9.9",
                 ["DOTNET_EXE"] = "dotnet",
-                ["NUGET_AUTH_TOKEN"] = "test-token",
+                ["NUGET_API_KEY"] = "test-token",
             }));
 
         Assert.True(result.Succeeded, "Push script failed." + Environment.NewLine + result.Describe());
@@ -544,8 +564,9 @@ public sealed class RepositoryWorkflowPolicyTests
     }
 
     /// <summary>
-    /// Verifies both workflows pin the exact checkout commit, disable persisted
-    /// credentials, and use no other action reference.
+    /// Verifies both workflows pin the exact checkout commit, publish pins the
+    /// exact NuGet login commit and tag, checkout disables persisted credentials,
+    /// and no other action reference is used.
     /// </summary>
     [Fact]
     public void RepositoryWorkflows_PinOnlyKnownActions()
@@ -554,12 +575,36 @@ public sealed class RepositoryWorkflowPolicyTests
         var publish = WorkflowDocument.Load("publish.yml");
 
         Assert.Equal(3, ci.AllUses().Count);
-        Assert.Single(publish.AllUses());
+        Assert.Equal(2, publish.AllUses().Count);
         Assert.All(ci.AllUses(), reference => Assert.Equal(CheckoutAction, reference));
-        Assert.All(publish.AllUses(), reference => Assert.Equal(CheckoutAction, reference));
+        Assert.Equal([CheckoutAction, NuGetLoginAction], publish.AllUses());
+        Assert.All(
+            publish.AllUses(),
+            reference => Assert.Matches(@"^[^@]+@[0-9a-f]{40}$", reference));
 
         AssertCheckouts(ci, 3);
         AssertCheckouts(publish, 1, expectedRef: "refs/heads/main");
+
+        var login = publish.Step("publish", "NuGet login (OIDC)");
+        Assert.Equal("nuget_login", Scalar(Get(login, "id")));
+        Assert.Equal(NuGetLoginAction, Scalar(Get(login, "uses")));
+        Assert.Equal(
+            "Kiryuumaru",
+            publish.StringMap(publish.Mapping(login, "with"))["user"]);
+        Assert.Equal(
+            publish.JobCondition("publish"),
+            NormalizeExpression(Scalar(Get(login, "if"))));
+
+        var publishText = File.ReadAllText(Path.Combine(
+                RepositoryLayout.Locate().Root,
+                ".github",
+                "workflows",
+                "publish.yml"))
+            .Replace("\r\n", "\n", StringComparison.Ordinal);
+        Assert.Contains(
+            "uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0",
+            publishText,
+            StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -645,13 +690,59 @@ public sealed class RepositoryWorkflowPolicyTests
         }
     }
 
+    /// <summary>
+    /// Verifies the workflow keeps read-only default permissions and that no job
+    /// overrides them. Used for CI, where no job needs an elevated scope.
+    /// </summary>
     private static void AssertReadOnlyDefaultPermissions(WorkflowDocument workflow)
     {
-        var permissions = workflow.StringMap(workflow.Mapping(workflow.Root, "permissions"));
-        Assert.Equal(["contents"], workflow.Keys(workflow.Mapping(workflow.Root, "permissions")));
-        Assert.Equal("read", permissions["contents"]);
+        Assert.Equal("ci.yml", workflow.FileName);
+        var rootPermissions = workflow.Mapping(workflow.Root, "permissions");
+        Assert.Equal(["contents"], workflow.Keys(rootPermissions));
+        Assert.Equal("read", workflow.StringMap(rootPermissions)["contents"]);
+        Assert.DoesNotContain("write-all", workflow.AllScalars());
+
         foreach (var jobId in workflow.JobIds)
         {
+            Assert.False(
+                workflow.Has("permissions", workflow.Job(jobId)),
+                "Job '" + jobId + "' must not override the read-only default permissions.");
+        }
+    }
+
+    /// <summary>
+    /// Verifies the publish workflow keeps read-only defaults and that its
+    /// <c>publish</c> job declares exactly the OIDC elevation it needs.
+    /// </summary>
+    private static void AssertPublishJobPermissions(WorkflowDocument workflow)
+    {
+        Assert.Equal("publish.yml", workflow.FileName);
+        var rootPermissions = workflow.Mapping(workflow.Root, "permissions");
+        Assert.Equal(["contents"], workflow.Keys(rootPermissions));
+        Assert.Equal("read", workflow.StringMap(rootPermissions)["contents"]);
+        Assert.DoesNotContain("write-all", workflow.AllScalars());
+
+        var publish = workflow.Job("publish");
+        Assert.True(
+            workflow.Has("permissions", publish),
+            "The publish job must declare permissions: contents: read and id-token: write for OIDC.");
+        var permissions = workflow.Mapping(publish, "permissions");
+        Assert.Equal(["contents", "id-token"], workflow.Keys(permissions));
+        var values = workflow.StringMap(permissions);
+        Assert.Equal("read", values["contents"]);
+        Assert.Equal("write", values["id-token"]);
+        Assert.DoesNotContain("packages", values.Keys);
+        Assert.DoesNotContain(
+            values,
+            pair => pair.Key != "id-token" && pair.Value == "write");
+
+        foreach (var jobId in workflow.JobIds)
+        {
+            if (jobId == "publish")
+            {
+                continue;
+            }
+
             Assert.False(
                 workflow.Has("permissions", workflow.Job(jobId)),
                 "Job '" + jobId + "' must not override the read-only default permissions.");
@@ -748,12 +839,15 @@ public sealed class RepositoryWorkflowPolicyTests
 
     private sealed class WorkflowDocument
     {
-        private WorkflowDocument(YamlMappingNode root)
+        private WorkflowDocument(YamlMappingNode root, string fileName)
         {
             Root = root;
+            FileName = fileName;
         }
 
         public YamlMappingNode Root { get; }
+
+        public string FileName { get; }
 
         public IReadOnlyList<string> JobIds => Keys(Mapping(Root, "jobs"));
 
@@ -792,7 +886,8 @@ public sealed class RepositoryWorkflowPolicyTests
             stream.Load(reader);
             Assert.Single(stream.Documents);
             return new WorkflowDocument(
-                Assert.IsType<YamlMappingNode>(stream.Documents[0].RootNode));
+                Assert.IsType<YamlMappingNode>(stream.Documents[0].RootNode),
+                Path.GetFileName(path));
         }
 
         public YamlMappingNode Job(string jobId) => Mapping(Mapping(Root, "jobs"), jobId);

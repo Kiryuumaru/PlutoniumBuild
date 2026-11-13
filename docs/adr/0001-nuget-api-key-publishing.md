@@ -1,6 +1,8 @@
 # 0001 — Publish to nuget.org with a step-scoped API key
 
-- **Status:** Accepted
+> **Superseded by [ADR-0002](0002-nuget-trusted-publishing.md): NuGet Trusted Publishing via GitHub OIDC.**
+
+- **Status:** Superseded by ADR-0002
 - **Date:** 2026-10-21
 
 ## Context
