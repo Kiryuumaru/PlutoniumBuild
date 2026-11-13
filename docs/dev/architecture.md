@@ -122,6 +122,7 @@ thin wrappers into `build/`.
 | `build/update.sh/.ps1/.cmd` | Managed | Replaced |
 | `build/bootstrap.sh/.ps1` | Managed | Replaced |
 | `build/.gitignore` | Managed | Replaced |
+| `build/README.md` | Managed | Replaced |
 | root `build.sh/.ps1/.cmd` | Managed | Thin wrappers into `build/` |
 
 ## SDK bootstrap and update flow

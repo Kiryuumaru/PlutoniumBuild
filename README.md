@@ -6,6 +6,8 @@ Build automation for any repository. Describe test, build, and publish steps in 
 >
 > **Release gate:** the repository is currently private and the 0.1.0 distribution is not published. The one-line installer only works after the repository is public and a release commit is published. `dotnet add package PlutoniumBuild` only works after the 0.1.0 package is published to nuget.org through the manual publish workflow; publishing does not require the repository to be public. The commands below use `<release-sha>` as the placeholder for that full 40-character commit SHA.
 
+**AI agents:** start with [INIT.md](INIT.md) for the install, run, CI, and update steps.
+
 ## Why use it
 
 - Automate CI/CD for any repository and any stack: steps are C# entries, and any step can run any external tool as a terminal call.
@@ -21,19 +23,28 @@ Run the installer from the repository you want to build. This one line downloads
 curl -fsSL https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.sh | bash -s -- --sha <release-sha>
 ```
 
-Prefer to inspect the script before running it? Download it first:
+Prefer to inspect the script before running it? Download it to `init.sh.new` first:
 
 ```bash
-curl -fsSL -o init.sh https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.sh
-bash init.sh --sha <release-sha>
+rm -f init.sh.new && curl -fsSL -o init.sh.new https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.sh
+```
+
+Download to a fresh file. Do not run a leftover `init.sh.new` from an earlier attempt.
+
+Inspect `init.sh.new`, then run it:
+
+```bash
+mv init.sh.new init.sh && bash init.sh --sha <release-sha>
 ```
 
 On Windows PowerShell:
 
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.ps1 -OutFile init.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.ps1 -OutFile init.ps1 -ErrorAction Stop
 powershell -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -Sha <release-sha>
 ```
+
+Download to a fresh file. Do not run an `init.ps1` left over from an earlier attempt.
 
 Before you run it:
 
@@ -60,6 +71,7 @@ build/
 ├── update.sh/.ps1/.cmd    # managed: updater
 ├── bootstrap.sh/.ps1      # managed: verified SDK bootstrap
 ├── .gitignore             # managed: temp/, bin/, obj/
+├── README.md              # managed: build guide
 └── temp/                  # created on first run: SDK, scratch, output, cache
 ```
 
@@ -187,7 +199,7 @@ With no arguments your app opens an interactive picker over everything it can do
 ./build.sh github-workflow             # regenerate the CI file
 ```
 
-Add `--list` to any command to preview its steps instead of running them. See the [CLI reference](docs/cli.md) for all 16 verbs, aliases, options, and exit codes.
+Add `--list` to any command to list the available verbs and targets instead of running them. See the [CLI reference](docs/cli.md) for all 16 verbs, aliases, options, and exit codes.
 
 ## What it generates
 

@@ -35,6 +35,7 @@ managed build/update.ps1 94b1c2c329b8dff641f9b849fb6643558d05c0f5ccc012a90c07f62
 managed build/update.cmd 8012762075d0bf4b5cc6c2738b808a89dbad9020bb74bb36ecb885cb6979fc65
 managed build/global.json ea832b7db9570fb51750ec78ee59f5980f6c7a3b49d7e681fea6aa3533de794b
 managed build/.gitignore 81e7aa1e8c9d137dcb60f5390b9898455a3b69954fc656609a51ac0ecf5acf1b
+managed build/README.md c001dfa66f1ff402637dd24ff3f0524bbaa74ef0d13c6838eb215ddeb4329245
 preserve build/build.cs
 preserve build/build.slnx
 preserve build/Directory.Build.props

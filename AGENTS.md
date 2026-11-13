@@ -26,6 +26,7 @@ and state it.
 /
 ├── AGENTS.md               # this file — agent working agreements
 ├── README.md               # consumer how-to (package, scaffold, CLI)
+├── INIT.md                 # agent entry point (install, run, CI, update)
 ├── PlutoniumBuild.sln     # solution (Phase-B plus distribution landed)
 ├── global.json             # SDK pin only: 10.0.402, latestPatch, no prerelease
 ├── build.sh                # maintainer runner: bootstrap SDK, build + test (bash)

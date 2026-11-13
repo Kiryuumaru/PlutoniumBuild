@@ -22,26 +22,37 @@ tooling. Run this from the repository you want to build:
 curl -fsSL https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.sh | bash -s -- --sha <release-sha>
 ```
 
-Replace both `<release-sha>` placeholders with the same full 40-character release
+Replace every `<release-sha>` placeholder with the same full 40-character release
 commit SHA. The source repository must be public and that commit must exist. The
 installer also needs `git` on `PATH` and refuses to overwrite an existing
 `build/` or conflicting root `build.sh` / `build.ps1` / `build.cmd`. If you
 override the default with `--source` (`-Source`), use a credential-free URL: the
 installer rejects userinfo, query strings, and fragments.
 
-To inspect the script first:
+To inspect the script first, download it to `init.sh.new`:
 
 ```bash
-curl -fsSL -o init.sh https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.sh
-bash init.sh --sha <release-sha>
+rm -f init.sh.new && curl -fsSL -o init.sh.new https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.sh
+```
+
+Download to a fresh file. Do not run a leftover `init.sh.new` from an earlier
+attempt.
+
+Inspect `init.sh.new`, then run it:
+
+```bash
+mv init.sh.new init.sh && bash init.sh --sha <release-sha>
 ```
 
 On Windows PowerShell:
 
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.ps1 -OutFile init.ps1
+Invoke-WebRequest https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.ps1 -OutFile init.ps1 -ErrorAction Stop
 powershell -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -Sha <release-sha>
 ```
+
+Download to a fresh file. Do not run an `init.ps1` left over from an earlier
+attempt.
 
 The installer verifies the pinned commit, requires every scaffold payload file
 except the lock itself to be listed in the lock, checks that the lock package
@@ -66,6 +77,7 @@ build/
 ├── update.sh/.ps1/.cmd    # managed: updater
 ├── bootstrap.sh/.ps1      # managed: verified SDK bootstrap
 ├── .gitignore             # managed: temp/, bin/, obj/
+├── README.md              # managed: build guide
 └── temp/                  # created on first run: SDK, scratch, output, cache
 ```
 
@@ -174,7 +186,7 @@ mybuild shell github-workflow          # write the GitHub Actions file
 mybuild shell azure-workflow           # write azure-pipelines.yml
 ```
 
-Add `--list` to a verb to preview its entries instead of running them. In a
+Add `--list` to a verb to list the available targets instead of running them. In a
 scaffolded repository, `./build.sh Test` is the same command as
 `./build.sh shell Test`.
 

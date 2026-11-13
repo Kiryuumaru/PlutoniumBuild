@@ -9,9 +9,9 @@ mybuild shell Bump --args myapp=minor+1  # release a new version
 mybuild shell github-workflow          # regenerate the CI file
 ```
 
-Add `--list` to any command to preview its steps instead of running them.
+Add `--list` to any command to list the available verbs and targets instead of running them.
 
-In a scaffolded repository, the root `build.sh` / `build.cmd` wrappers add `shell` when the first argument is a verb. `./build.sh Test` therefore runs the same command as `./build.sh shell Test`.
+In a scaffolded repository, the managed `build/Program.cs` prepends `shell` when the first argument is a verb; the root `build.sh` / `build.ps1` / `build.cmd` wrappers only forward arguments. `./build.sh Test` therefore runs the same command as `./build.sh shell Test`.
 
 ## Verbs
 
@@ -46,8 +46,8 @@ Every command accepts the same options.
 | ------ | ------------ |
 | `--skip <step>` | Skip a step. Repeat to skip more than one. Empty values are rejected. |
 | `--args <value>` | Pass `app=expression` to `Bump` or `BumpAndForget`, or an app name to `delete-origin-tags`. Repeat per app. |
-| `--list` | Show steps instead of running them. |
-| `--all` | With `--list`, also show the unlisted steps (the CI-internal trio plus the tag-wipe maintenance verb). |
+| `--list` | List the available verbs and targets instead of running them. |
+| `--all` | With `--list`, also list the unlisted targets (the CI-internal trio plus the tag-wipe maintenance verb). |
 
 Sources: `src/Plutonium.Shell/PlutoniumShellCommand.cs:15-29` (option definitions), `src/Plutonium.Shell/PlutoniumShellCommand.cs:38-51` (empty `--skip` rejected; `--list` prints targets; `--all` includes unlisted).
 

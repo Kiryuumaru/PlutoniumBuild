@@ -6,6 +6,8 @@ Start with the [README](../README.md), then use these guides.
 
 The [README](../README.md) shows what PlutoniumBuild is, how to install the `PlutoniumBuild` package, and how to initialize the consumer scaffold with one command. The scaffold installs `build/` plus thin root `build.sh`, `build.ps1`, and `build.cmd` wrappers; `build/update.*` refreshes it later.
 
+AI agents: start with [INIT.md](../INIT.md) for the install, run, CI, and update steps.
+
 ## Running your build
 
 After the scaffold is installed, run `./build.sh Test`, `./build.sh Build`, or `./build.sh Publish`. The launcher installs the pinned SDK under `build/temp` when needed, then builds and runs `build/build.csproj`. See [Runner scripts and scaffold](workflows.md#runner-scripts-and-scaffold).
