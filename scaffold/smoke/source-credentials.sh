@@ -5,13 +5,13 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-TEMP=$(mktemp -d "${TMPDIR:-/tmp}/plutonium-source-credentials.XXXXXXXX")
-trap 'rm -rf -- "$TEMP"' EXIT
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/plutonium-source-credentials.XXXXXXXX")
+trap 'rm -rf -- "$WORK"' EXIT
 
 failures=0
 
 reject_init() {
-    local label="$1" source="$2" target="$TEMP/init-$3"
+    local label="$1" source="$2" target="$WORK/init-$3"
     mkdir -p "$target"
     local output rc
     set +e
@@ -33,7 +33,7 @@ reject_init() {
 }
 
 reject_update() {
-    local label="$1" source="$2" target="$TEMP/update-$3"
+    local label="$1" source="$2" target="$WORK/update-$3"
     mkdir -p "$target/build"
     cat > "$target/build/plutonium.lock" <<EOF
 source=$source
@@ -62,7 +62,7 @@ EOF
 }
 
 reject_update_url() {
-    local label="$1" source_url="$2" target="$TEMP/update-url-$3"
+    local label="$1" source_url="$2" target="$WORK/update-url-$3"
     mkdir -p "$target/build"
     cat > "$target/build/plutonium.lock" <<EOF
 source=https://example.test/repo.git
