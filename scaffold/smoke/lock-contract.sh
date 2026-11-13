@@ -5,8 +5,9 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-TEMP=$(mktemp -d "${TMPDIR:-/tmp}/plutonium-lock-contract.XXXXXXXX")
-trap 'rm -rf -- "$TEMP"' EXIT
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/plutonium-lock-contract.XXXXXXXX")
+OUT="$WORK/lock-contract.out"
+trap 'rm -rf -- "$WORK"' EXIT
 
 failures=0
 fail() {
@@ -22,76 +23,76 @@ copy_scaffold() {
 }
 
 # Lock verify must reject an unlisted build payload file.
-copy_scaffold "$TEMP/unlisted-build"
-echo 'unlisted' > "$TEMP/unlisted-build/scaffold/build/extra.txt"
-if bash "$TEMP/unlisted-build/scaffold/lock.sh" verify >/tmp/plutonium-lock-contract.out 2>&1; then
+copy_scaffold "$WORK/unlisted-build"
+echo 'unlisted' > "$WORK/unlisted-build/scaffold/build/extra.txt"
+if bash "$WORK/unlisted-build/scaffold/lock.sh" verify >"$OUT" 2>&1; then
     fail "lock verify accepted an unlisted build file."
-elif ! grep -q 'not managed or preserved' /tmp/plutonium-lock-contract.out; then
+elif ! grep -q 'not managed or preserved' "$OUT"; then
     fail "lock verify failed without naming the unlisted build file."
 fi
-rm -f /tmp/plutonium-lock-contract.out
+rm -f "$OUT"
 
 # Lock verify must reject an unlisted root wrapper.
-copy_scaffold "$TEMP/unlisted-root"
-echo '# unlisted' > "$TEMP/unlisted-root/scaffold/root/extra.sh"
-if bash "$TEMP/unlisted-root/scaffold/lock.sh" verify >/tmp/plutonium-lock-contract.out 2>&1; then
+copy_scaffold "$WORK/unlisted-root"
+echo '# unlisted' > "$WORK/unlisted-root/scaffold/root/extra.sh"
+if bash "$WORK/unlisted-root/scaffold/lock.sh" verify >"$OUT" 2>&1; then
     fail "lock verify accepted an unlisted root wrapper."
-elif ! grep -q 'root wrapper extra.sh' /tmp/plutonium-lock-contract.out; then
+elif ! grep -q 'root wrapper extra.sh' "$OUT"; then
     fail "lock verify failed without naming the unlisted root wrapper."
 fi
-rm -f /tmp/plutonium-lock-contract.out
+rm -f "$OUT"
 
 # Generated-looking directories are not an exemption from the contract.
-copy_scaffold "$TEMP/unlisted-bin"
-mkdir -p "$TEMP/unlisted-bin/scaffold/build/bin"
-echo 'unlisted' > "$TEMP/unlisted-bin/scaffold/build/bin/extra.txt"
-if bash "$TEMP/unlisted-bin/scaffold/lock.sh" verify >/tmp/plutonium-lock-contract.out 2>&1; then
+copy_scaffold "$WORK/unlisted-bin"
+mkdir -p "$WORK/unlisted-bin/scaffold/build/bin"
+echo 'unlisted' > "$WORK/unlisted-bin/scaffold/build/bin/extra.txt"
+if bash "$WORK/unlisted-bin/scaffold/lock.sh" verify >"$OUT" 2>&1; then
     fail "lock verify accepted an unlisted file under build/bin."
-elif ! grep -q 'build/bin/extra.txt is not managed or preserved' /tmp/plutonium-lock-contract.out; then
+elif ! grep -q 'build/bin/extra.txt is not managed or preserved' "$OUT"; then
     fail "lock verify failed without naming the unlisted build/bin file."
 fi
-rm -f /tmp/plutonium-lock-contract.out
+rm -f "$OUT"
 
 # Duplicate managed entries make the hash ambiguous.
-copy_scaffold "$TEMP/duplicate"
-duplicate_line=$(grep '^managed build/build.sh ' "$TEMP/duplicate/scaffold/build/plutonium.lock")
-printf '%s\n' "$duplicate_line" >> "$TEMP/duplicate/scaffold/build/plutonium.lock"
-if bash "$TEMP/duplicate/scaffold/lock.sh" verify >/tmp/plutonium-lock-contract.out 2>&1; then
+copy_scaffold "$WORK/duplicate"
+duplicate_line=$(grep '^managed build/build.sh ' "$WORK/duplicate/scaffold/build/plutonium.lock")
+printf '%s\n' "$duplicate_line" >> "$WORK/duplicate/scaffold/build/plutonium.lock"
+if bash "$WORK/duplicate/scaffold/lock.sh" verify >"$OUT" 2>&1; then
     fail "lock verify accepted duplicate managed entries."
-elif ! grep -q 'duplicate managed entries' /tmp/plutonium-lock-contract.out; then
+elif ! grep -q 'duplicate managed entries' "$OUT"; then
     fail "lock verify did not report duplicate managed entries."
 fi
-rm -f /tmp/plutonium-lock-contract.out
+rm -f "$OUT"
 
 # src/Directory.Build.props participates in the package-version invariant.
-copy_scaffold "$TEMP/props"
-sed -i 's/<Version>0.1.0</<Version>9.9.9</' "$TEMP/props/src/Directory.Build.props"
-if bash "$TEMP/props/scaffold/lock.sh" verify >/tmp/plutonium-lock-contract.out 2>&1; then
+copy_scaffold "$WORK/props"
+sed -i 's/<Version>0.1.0</<Version>9.9.9</' "$WORK/props/src/Directory.Build.props"
+if bash "$WORK/props/scaffold/lock.sh" verify >"$OUT" 2>&1; then
     fail "lock verify accepted a mismatched src/Directory.Build.props version."
-elif ! grep -q 'src/Directory.Build.props version 9.9.9 does not match' /tmp/plutonium-lock-contract.out; then
+elif ! grep -q 'src/Directory.Build.props version 9.9.9 does not match' "$OUT"; then
     fail "lock verify did not report the props version mismatch."
 fi
-if bash "$TEMP/props/scaffold/lock.sh" write >/tmp/plutonium-lock-contract.out 2>&1; then
+if bash "$WORK/props/scaffold/lock.sh" write >"$OUT" 2>&1; then
     fail "lock write accepted a mismatched src/Directory.Build.props version."
 fi
-rm -f /tmp/plutonium-lock-contract.out
+rm -f "$OUT"
 
 # Both write and verify must enforce the package-version invariant.
-copy_scaffold "$TEMP/version"
-sed -i 's/Version="0.1.0"/Version="9.9.9"/' "$TEMP/version/scaffold/build/build.csproj"
-if bash "$TEMP/version/scaffold/lock.sh" verify >/tmp/plutonium-lock-contract.out 2>&1; then
+copy_scaffold "$WORK/version"
+sed -i 's/Version="0.1.0"/Version="9.9.9"/' "$WORK/version/scaffold/build/build.csproj"
+if bash "$WORK/version/scaffold/lock.sh" verify >"$OUT" 2>&1; then
     fail "lock verify accepted a mismatched package pin."
-elif ! grep -q 'does not match package_version' /tmp/plutonium-lock-contract.out; then
+elif ! grep -q 'does not match package_version' "$OUT"; then
     fail "lock verify did not report the package pin mismatch."
 fi
-if bash "$TEMP/version/scaffold/lock.sh" write >/tmp/plutonium-lock-contract.out 2>&1; then
+if bash "$WORK/version/scaffold/lock.sh" write >"$OUT" 2>&1; then
     fail "lock write accepted a mismatched package pin."
 fi
-rm -f /tmp/plutonium-lock-contract.out
+rm -f "$OUT"
 
 # init and update must reject a source tree with an unlisted payload file.
-SOURCE="$TEMP/source"
-CONSUMER="$TEMP/consumer"
+SOURCE="$WORK/source"
+CONSUMER="$WORK/consumer"
 copy_scaffold "$SOURCE"
 cp "$ROOT/init.sh" "$SOURCE/init.sh"
 git -C "$SOURCE" init -q
@@ -110,28 +111,28 @@ git -C "$SOURCE" add -A
 git -C "$SOURCE" commit -qm unlisted
 SHA2=$(git -C "$SOURCE" rev-parse HEAD)
 
-mkdir -p "$TEMP/rejected-consumer"
-if bash "$ROOT/init.sh" --source "$SOURCE" --sha "$SHA2" --target "$TEMP/rejected-consumer" >/tmp/plutonium-lock-contract.out 2>&1; then
+mkdir -p "$WORK/rejected-consumer"
+if bash "$ROOT/init.sh" --source "$SOURCE" --sha "$SHA2" --target "$WORK/rejected-consumer" >"$OUT" 2>&1; then
     fail "init accepted an unlisted source file."
-elif ! grep -q 'unlisted file: build/extra.txt' /tmp/plutonium-lock-contract.out; then
+elif ! grep -q 'unlisted file: build/extra.txt' "$OUT"; then
     fail "init did not report the unlisted source file."
 fi
-if [ -e "$TEMP/rejected-consumer/build" ]; then
+if [ -e "$WORK/rejected-consumer/build" ]; then
     fail "init installed a rejected source tree."
 fi
 
-if bash "$CONSUMER/build/update.sh" --source "$SOURCE" --sha "$SHA2" --target "$CONSUMER" --no-smoke >/tmp/plutonium-lock-contract.out 2>&1; then
+if bash "$CONSUMER/build/update.sh" --source "$SOURCE" --sha "$SHA2" --target "$CONSUMER" --no-smoke >"$OUT" 2>&1; then
     fail "update accepted an unlisted source file."
-elif ! grep -q 'unlisted file: build/extra.txt' /tmp/plutonium-lock-contract.out; then
+elif ! grep -q 'unlisted file: build/extra.txt' "$OUT"; then
     fail "update did not report the unlisted source file."
 fi
 if [ "$(sha256sum "$CONSUMER/build/plutonium.lock" | awk '{print $1}')" != "$BEFORE" ]; then
     fail "update changed the lock after rejecting the source tree."
 fi
-rm -f /tmp/plutonium-lock-contract.out
+rm -f "$OUT"
 
 # init must reject a source whose props version disagrees with the lock.
-PROPS_SOURCE="$TEMP/props-source"
+PROPS_SOURCE="$WORK/props-source"
 copy_scaffold "$PROPS_SOURCE"
 cp "$ROOT/init.sh" "$PROPS_SOURCE/init.sh"
 sed -i 's/<Version>0.1.0</<Version>9.9.9</' "$PROPS_SOURCE/src/Directory.Build.props"
@@ -141,13 +142,13 @@ git -C "$PROPS_SOURCE" config user.name Smoke
 git -C "$PROPS_SOURCE" add -A
 git -C "$PROPS_SOURCE" commit -qm props-mismatch
 PROPS_SHA=$(git -C "$PROPS_SOURCE" rev-parse HEAD)
-mkdir -p "$TEMP/props-consumer"
-if bash "$ROOT/init.sh" --source "$PROPS_SOURCE" --sha "$PROPS_SHA" --target "$TEMP/props-consumer" >/tmp/plutonium-lock-contract.out 2>&1; then
+mkdir -p "$WORK/props-consumer"
+if bash "$ROOT/init.sh" --source "$PROPS_SOURCE" --sha "$PROPS_SHA" --target "$WORK/props-consumer" >"$OUT" 2>&1; then
     fail "init accepted a source with a mismatched props version."
-elif ! grep -q 'Directory.Build.props version 9.9.9 does not match' /tmp/plutonium-lock-contract.out; then
+elif ! grep -q 'Directory.Build.props version 9.9.9 does not match' "$OUT"; then
     fail "init did not report the source props version mismatch."
 fi
-rm -f /tmp/plutonium-lock-contract.out
+rm -f "$OUT"
 
 if [ "$failures" -ne 0 ]; then
     echo "lock-contract: $failures failure(s)." >&2

@@ -6,8 +6,8 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-TEMP=$(mktemp -d "${TMPDIR:-/tmp}/plutonium-update-rollback.XXXXXXXX")
-trap 'rm -rf -- "$TEMP"' EXIT
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/plutonium-update-rollback.XXXXXXXX")
+trap 'rm -rf -- "$WORK"' EXIT
 
 failures=0
 fail() {
@@ -15,8 +15,8 @@ fail() {
     failures=$((failures + 1))
 }
 
-source_root="$TEMP/source"
-consumer="$TEMP/consumer"
+source_root="$WORK/source"
+consumer="$WORK/consumer"
 mkdir -p "$source_root/src" "$consumer"
 cp -a "$ROOT/scaffold" "$source_root/scaffold"
 cp "$ROOT/init.sh" "$source_root/init.sh"
@@ -65,7 +65,7 @@ git -C "$source_root" add -A
 git -C "$source_root" commit -qm smoke-trigger
 sha2=$(git -C "$source_root" rev-parse HEAD)
 
-if bash "$consumer/build/update.sh" --source "$source_root" --sha "$sha2" --target "$consumer" --smoke >"$TEMP/smoke.out" 2>&1; then
+if bash "$consumer/build/update.sh" --source "$source_root" --sha "$sha2" --target "$consumer" --smoke >"$WORK/smoke.out" 2>&1; then
     fail "update reported success while the smoke build failed."
 fi
 if [ -e "$consumer/build/rollback-probe.txt" ]; then
@@ -91,7 +91,7 @@ git -C "$source_root" add -A
 git -C "$source_root" commit -qm apply-trigger
 sha3=$(git -C "$source_root" rev-parse HEAD)
 
-if bash "$consumer/build/update.sh" --source "$source_root" --sha "$sha3" --target "$consumer" --no-smoke >"$TEMP/apply.out" 2>&1; then
+if bash "$consumer/build/update.sh" --source "$source_root" --sha "$sha3" --target "$consumer" --no-smoke >"$WORK/apply.out" 2>&1; then
     fail "update reported success while apply could not create build/zzz/nested.txt."
 fi
 if [ -e "$consumer/build/aaa-new.txt" ] || [ -e "$consumer/build/zzz/nested.txt" ]; then

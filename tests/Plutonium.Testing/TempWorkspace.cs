@@ -14,6 +14,9 @@ public sealed class TempWorkspace : IDisposable
     /// <summary>Gets the absolute path of the workspace root.</summary>
     public string Root { get; }
 
+    /// <summary>Gets the shared directory that owns every test workspace.</summary>
+    public static string BaseDirectory => ResolveBaseDirectory();
+
     /// <summary>Creates a new, uniquely named workspace below the test temp root.</summary>
     /// <param name="name">A short, human-readable prefix for the workspace name.</param>
     /// <returns>The created workspace.</returns>
@@ -21,18 +24,10 @@ public sealed class TempWorkspace : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
-        var baseDirectory = Environment.GetEnvironmentVariable("PLUTONIUM_TEST_TEMP");
-        if (string.IsNullOrWhiteSpace(baseDirectory))
-        {
-            baseDirectory = OperatingSystem.IsWindows()
-                ? Path.Combine(Path.GetTempPath(), "pb")
-                : Path.Combine("/tmp/opencode", "pb");
-        }
-
         var safeName = new string(name
             .Select(character => char.IsLetterOrDigit(character) ? char.ToLowerInvariant(character) : '-')
             .ToArray());
-        var path = Path.Combine(baseDirectory, safeName + "-" + Guid.NewGuid().ToString("N")[..10]);
+        var path = Path.Combine(BaseDirectory, safeName + "-" + Guid.NewGuid().ToString("N")[..10]);
         Directory.CreateDirectory(path);
         return new TempWorkspace(path);
     }
@@ -84,6 +79,19 @@ public sealed class TempWorkspace : IDisposable
                 Thread.Sleep(100);
             }
         }
+    }
+
+    private static string ResolveBaseDirectory()
+    {
+        var baseDirectory = Environment.GetEnvironmentVariable("PLUTONIUM_TEST_TEMP");
+        if (!string.IsNullOrWhiteSpace(baseDirectory))
+        {
+            return baseDirectory;
+        }
+
+        return OperatingSystem.IsWindows()
+            ? Path.Combine(Path.GetTempPath(), "pb")
+            : Path.Combine("/tmp/opencode", "pb");
     }
 
     private static void ClearReadOnlyAttributes(string path)
