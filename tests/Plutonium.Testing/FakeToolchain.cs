@@ -236,9 +236,11 @@ public sealed class FakeToolchain
         {
             ["PATH"] = BuildPath(includeExistingPath),
             ["HOME"] = HomeDirectory,
+            // TMP and TEMP are deliberately not overridden: the child inherits
+            // the parent's values, and Git for Windows derives its shared /tmp
+            // mount from TEMP. Pointing that mount at a disposable workspace
+            // races with parallel assembly cleanup.
             ["TMPDIR"] = TempDirectory,
-            ["TMP"] = TempDirectory,
-            ["TEMP"] = TempDirectory,
             ["NUGET_PACKAGES"] = Path.Combine(RootDirectory, "nuget", "packages"),
             ["NUGET_HTTP_CACHE_PATH"] = Path.Combine(RootDirectory, "nuget", "http-cache"),
             ["DOTNET_CLI_HOME"] = HomeDirectory,
