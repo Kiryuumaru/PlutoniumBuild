@@ -28,19 +28,19 @@ installer also needs `git` on `PATH` and refuses to overwrite an existing
 override the default with `--source` (`-Source`), use a credential-free URL: the
 installer rejects userinfo, query strings, and fragments.
 
-To inspect the script first, download it to `init.sh.new`:
+To inspect the script first, download it to `init.sh.dl`:
 
 ```bash
-rm -f init.sh.new && curl -fsSL -o init.sh.new https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.sh
+rm -f init.sh.dl && curl -fsSL -o init.sh.dl https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.sh
 ```
 
-Download to a fresh file. Do not run a leftover `init.sh.new` from an earlier
+Download to a fresh file. Do not run a leftover `init.sh.dl` from an earlier
 attempt.
 
-Inspect `init.sh.new`, then run it:
+Inspect `init.sh.dl`, then run it:
 
 ```bash
-mv init.sh.new init.sh && bash init.sh --sha 6aec14937739661d9c24affffaa6c8928c1f2655
+mv init.sh.dl init.sh && bash init.sh --sha 6aec14937739661d9c24affffaa6c8928c1f2655
 ```
 
 On Windows PowerShell:
