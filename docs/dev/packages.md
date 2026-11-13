@@ -72,11 +72,14 @@ points at a newer release.
 true from `main`; the job is skipped otherwise and on any other ref. It checks
 out `refs/heads/main`, re-verifies the scaffold lock, runs the full build and
 tests, packs the package, refuses to republish a version that already exists on
-nuget.org, and pushes with the `NUGET_AUTH_TOKEN` repository secret scoped to
-the push step. A fixed `publish-nuget` concurrency group serializes runs and
-protects an in-progress run from cancellation, though a newer queued run can
-still cancel an older pending run. The workflow uses no OIDC, no deployment
-environment, and no GitHub Packages, tag, or release steps.
+nuget.org, and pushes with a short-lived (about one hour) API key minted by
+NuGet Trusted Publishing through GitHub OIDC (`NuGet/login`); the OIDC token
+is single-use and no NuGet secret is stored. A fixed `publish-nuget`
+concurrency group serializes runs and protects an in-progress run from
+cancellation, though a newer queued run can still cancel an older pending run.
+The workflow requests `id-token: write` only on the confirmed main dispatch and
+uses no deployment environment, GitHub Packages, tags, or releases. See
+`docs/adr/0002-nuget-trusted-publishing.md` for the policy fields and cutover.
 
 Publishing is release-gated: the 0.1.0 package must be pushed to nuget.org
 before `dotnet add package PlutoniumBuild` resolves. The raw installer has a

@@ -37,7 +37,8 @@ After the scaffold is installed, run `./build.sh Test`, `./build.sh Build`, or `
 For maintainers, not end users. Design, scope, and package internals:
 
 - [Scope (authoritative for 0.1.0)](concepts/scope.md) — what is and is not included, including the package and scaffold.
-- [ADR 0001: NuGet API-key publishing](adr/0001-nuget-api-key-publishing.md) — why publishing uses a step-scoped API key instead of OIDC.
+- [ADR 0001: NuGet API-key publishing](adr/0001-nuget-api-key-publishing.md) — the superseded API-key decision.
+- [ADR 0002: NuGet Trusted Publishing](adr/0002-nuget-trusted-publishing.md) — why publishing uses GitHub OIDC instead of a long-lived API key.
 - [Packages](dev/packages.md) — the single `PlutoniumBuild` package, its contents, and the dependency rule.
 - [Architecture](dev/architecture.md) — package, scaffold, and library boundaries.
 - [Recreate intent](../src/CONCEPT.md) — 1 page.

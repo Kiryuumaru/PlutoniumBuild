@@ -51,7 +51,7 @@ and state it.
 │   └── PlutoniumBuild.Package/ # LANDED — the single packable net10.0 NuGet package
 ├── tests/                  # LANDED — Core / Helpers / Shell / Packaging / Scaffold / Sdk
 ├── samples/                # PLANNED
-├── .github/workflows/      # ci.yml + publish.yml (manual, main-only API-key publish)
+├── .github/workflows/      # ci.yml + publish.yml (manual, main-only OIDC publish)
 ├── docs/
 │   ├── index.md            # user docs hub (install/CLI/versioning/workflows)
 │   ├── cli.md              # CLI reference (verbs, options, exit codes)
@@ -116,10 +116,11 @@ and state it.
 - `.github/workflows/publish.yml` — manual nuget.org publish from `main`.
   Dispatch it with `confirm` set to true; the job is skipped otherwise and
   on any ref other than `refs/heads/main`. It packs the package, refuses a
-  version that already exists on nuget.org, and pushes with the
-  `NUGET_AUTH_TOKEN` repository secret scoped to the push step. It needs no
-  public repository and no deployment environment. Release-gated; never run
-  it as part of docs work.
+  version that already exists on nuget.org, and pushes with a short-lived
+  (about one hour) API key minted by NuGet Trusted Publishing through GitHub
+  OIDC (`NuGet/login`); the OIDC token is single-use and no NuGet secret is
+  stored. It needs no public repository and no deployment environment.
+  Release-gated; never run it as part of docs work.
 
 Docs tooling: none yet. Record verification as `Not run (docs-only)` unless
 project docs tooling is added.
@@ -135,8 +136,8 @@ Applies to landed code; state as gate, not current status:
   dependency.
 - Repository workflow policy tests assert the CI check names and triggers,
   the computed matrix, the Post Setup result gate, and the manual main-only
-  publish confirmation, version-exists guard, and step-scoped
-  `NUGET_AUTH_TOKEN` push.
+  publish confirmation, version-exists guard, and OIDC `NuGet/login` →
+  `NUGET_API_KEY` push.
 - Workflow security tests assert read-only default permissions, no
   workflow-level secret environment, write permission and the token
   environment only on pre/post setup, entry secret scoping and unknown-id

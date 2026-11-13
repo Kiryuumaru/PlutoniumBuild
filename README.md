@@ -4,7 +4,7 @@ Build automation for any repository. Describe test, build, and publish steps in 
 
 > Status: **0.1.0 distribution landed.** The engine, author layer, CLI, the single `PlutoniumBuild` package, and the scaffold installer/updater are built. `samples/` remains **planned**.
 >
-> **Release gate:** the repository is currently private and the 0.1.0 distribution is not published. The one-line installer only works after the repository is public and a release commit is published. `dotnet add package PlutoniumBuild` only works after the 0.1.0 package is published to nuget.org through the manual publish workflow; publishing does not require the repository to be public. The commands below pin that full 40-character commit SHA.
+> **Release gate:** the repository is currently private and the 0.1.0 distribution is not published. The one-line installer only works after the repository is public and a release commit is published. `dotnet add package PlutoniumBuild` only works after the 0.1.0 package is published to nuget.org through the manual publish workflow; publishing does not require the repository to be public. A private-repository Trusted Publishing policy may start with a 7-day temporary activation and becomes permanent after the first successful publish. The commands below pin that full 40-character commit SHA.
 
 **AI agents:** start with [INIT.md](INIT.md) for the install, run, CI, and update steps.
 
@@ -232,7 +232,7 @@ Two version lines stay separate:
 - `./build.sh` (or `./build.cmd` on Windows) is the maintainer runner: it installs the pinned SDK into `.plutonium/temp` when needed, then builds `PlutoniumBuild.sln` and runs every test.
 - CI verifies the scaffold lock, the four bash scaffold smokes, and PowerShell parse in `Pre Setup`; `Scaffold smoke` runs the PowerShell smoke on Ubuntu with `-SkipBuild` and the full flow on Windows; `Build and test` runs `./build.sh` or `.\build.cmd` on both hosts. `Post Setup` fails the run unless all three jobs succeed.
 - `dotnet pack src/PlutoniumBuild.Package/PlutoniumBuild.Package.csproj -c Release -o artifacts` builds the single NuGet package.
-- `.github/workflows/publish.yml` publishes to nuget.org with the `NUGET_AUTH_TOKEN` repository secret. It is manual: dispatch it with `confirm` set to true from `main`; it re-verifies the scaffold lock, runs build and tests, refuses a version that already exists, then pushes. It is release-gated.
+- `.github/workflows/publish.yml` publishes to nuget.org with NuGet Trusted Publishing: the OIDC token is single-use and the minted API key is short-lived (about one hour), obtained through the pinned `NuGet/login` action, so no NuGet secret is stored. It is manual: dispatch it with `confirm` set to true from `main`; it re-verifies the scaffold lock, runs build and tests, refuses a version that already exists, then pushes. It is release-gated. See [ADR 0002](docs/adr/0002-nuget-trusted-publishing.md).
 
 ## Links
 
