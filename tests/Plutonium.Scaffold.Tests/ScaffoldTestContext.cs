@@ -91,21 +91,17 @@ internal static class ScaffoldTestContext
     internal static Task<ProcessResult> RunScriptAsync(
         string scriptPath,
         IReadOnlyList<string> arguments,
-        string workingDirectory)
+        string workingDirectory,
+        IReadOnlyDictionary<string, string?>? environmentOverrides = null)
     {
-        var home = Path.Combine(
-            Path.GetDirectoryName(Path.GetFullPath(workingDirectory))!,
-            ".test-home");
-        Directory.CreateDirectory(home);
-        var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
+        var environment = CreateScriptEnvironment(workingDirectory);
+        if (environmentOverrides is not null)
         {
-            ["HOME"] = home,
-            ["GIT_CONFIG_NOSYSTEM"] = "1",
-            ["GIT_TERMINAL_PROMPT"] = "0",
-            ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1",
-            ["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1",
-            ["DOTNET_NOLOGO"] = "1",
-        };
+            foreach (var pair in environmentOverrides)
+            {
+                environment[pair.Key] = pair.Value;
+            }
+        }
 
         return ProcessHarness.RunBashAsync(
             scriptPath,
@@ -113,6 +109,53 @@ internal static class ScaffoldTestContext
             workingDirectory,
             environment,
             TimeSpan.FromMinutes(10));
+    }
+
+    /// <summary>
+    /// Builds the environment for scaffold scripts. <c>TMPDIR</c> is scoped to
+    /// the test workspace so <c>mktemp</c> never uses the shared MSYS
+    /// <c>/tmp</c> mount on Windows. <c>TMP</c> and <c>TEMP</c> are not
+    /// overridden: the child inherits the parent's values, and Git for Windows
+    /// derives that shared mount from them.
+    /// </summary>
+    /// <param name="workingDirectory">The directory the script runs in.</param>
+    /// <returns>The script environment.</returns>
+    internal static Dictionary<string, string?> CreateScriptEnvironment(string workingDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
+
+        var workspaceDirectory = Path.GetDirectoryName(Path.GetFullPath(workingDirectory))
+            ?? throw new InvalidOperationException(
+                "The script working directory has no parent: " + workingDirectory);
+        var baseDirectory = Path.GetFullPath(TempWorkspace.BaseDirectory);
+        var relativeWorkspace = Path.GetRelativePath(baseDirectory, workspaceDirectory);
+        // A caller that passes the workspace root as the working directory
+        // would otherwise create the temp directory in the shared base and
+        // reintroduce the cross-assembly race.
+        if (Path.IsPathRooted(relativeWorkspace) ||
+            relativeWorkspace == "." ||
+            relativeWorkspace == ".." ||
+            relativeWorkspace.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "The script working directory must be below a test workspace, not the shared test root: " +
+                workingDirectory);
+        }
+
+        var home = Path.Combine(workspaceDirectory, ".test-home");
+        var temporary = Path.Combine(workspaceDirectory, ".test-tmp");
+        Directory.CreateDirectory(home);
+        Directory.CreateDirectory(temporary);
+        return new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["HOME"] = home,
+            ["TMPDIR"] = temporary,
+            ["GIT_CONFIG_NOSYSTEM"] = "1",
+            ["GIT_TERMINAL_PROMPT"] = "0",
+            ["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1",
+            ["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1",
+            ["DOTNET_NOLOGO"] = "1",
+        };
     }
 
     internal static void AssertSucceeded(ProcessResult result, string operation)

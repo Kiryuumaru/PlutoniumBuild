@@ -149,6 +149,30 @@ public sealed class FakeToolchainTests
     }
 
     /// <summary>
+    /// The toolchain environment isolates temporary files with <c>TMPDIR</c>
+    /// only. <c>TMP</c> and <c>TEMP</c> are not exported because Git for
+    /// Windows derives its shared MSYS <c>/tmp</c> mount from them, and that
+    /// mount must not point at a disposable workspace. The guard runs on both
+    /// the Unix and Windows test legs.
+    /// </summary>
+    [Fact]
+    public void BuildEnvironment_ExportsTmpDirWithoutTmpOrTemp()
+    {
+        using var workspace = TempWorkspace.Create("sdk-toolchain-environment");
+        var toolchain = FakeToolchain.Create(workspace);
+
+        var environment = toolchain.BuildEnvironment();
+
+        Assert.True(environment.TryGetValue("TMPDIR", out var tmpDir), "TMPDIR is missing.");
+        Assert.Equal(toolchain.TempDirectory, tmpDir);
+        Assert.True(
+            Directory.Exists(toolchain.TempDirectory),
+            "The TMPDIR directory was not created: " + toolchain.TempDirectory);
+        Assert.False(environment.ContainsKey("TMP"), "TMP must not be exported.");
+        Assert.False(environment.ContainsKey("TEMP"), "TEMP must not be exported.");
+    }
+
+    /// <summary>
     /// A caller-supplied PATH keeps its entries first so a shim directory still
     /// wins, and the Git tool directories are appended after it.
     /// </summary>
