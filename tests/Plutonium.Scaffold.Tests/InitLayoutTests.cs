@@ -57,6 +57,32 @@ public sealed class InitLayoutTests
 
     }
 
+    /// <summary>The managed build guide is installed byte-for-byte and pinned by the lock.</summary>
+    [Fact]
+    public async Task Init_InstallsManagedBuildReadme()
+    {
+        using var workspace = TempWorkspace.Create("init-build-readme");
+        var layout = RepositoryLayout.Locate();
+        var source = await ScaffoldSource.CreateAsync(workspace, layout);
+        var target = ScaffoldTestContext.CreateConsumerRepository(workspace);
+
+        var result = await ScaffoldTestContext.RunInitAsync(source, target);
+        ScaffoldTestContext.AssertSucceeded(result, "init");
+
+        var sourceReadme = Path.Combine(layout.ScaffoldBuildDirectory, "README.md");
+        var installedReadme = Path.Combine(target.RootPath, "build", "README.md");
+        Assert.True(File.Exists(installedReadme), "Init did not install build/README.md.");
+        Assert.Equal(
+            await File.ReadAllBytesAsync(sourceReadme),
+            await File.ReadAllBytesAsync(installedReadme));
+
+        var lockFile = PlutoniumLockFile.Load(Path.Combine(target.RootPath, "build", "plutonium.lock"));
+        var expectedHash = Hashing.Sha256File(sourceReadme);
+        Assert.Equal(expectedHash, lockFile.GetHash("build/README.md"));
+        Assert.Equal(expectedHash, Hashing.Sha256File(installedReadme));
+
+    }
+
     /// <summary>The SDK pin and lock manifest record the source commit and every managed hash.</summary>
     [Fact]
     public async Task Init_PinsSdkAndWritesLockManifest()

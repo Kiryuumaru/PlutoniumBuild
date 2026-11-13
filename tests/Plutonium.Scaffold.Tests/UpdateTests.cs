@@ -69,6 +69,51 @@ public sealed class UpdateTests
 
     }
 
+    /// <summary>Update refreshes the managed build guide while preserving build.cs.</summary>
+    [Fact]
+    public async Task Update_RefreshesManagedBuildReadme()
+    {
+        using var workspace = TempWorkspace.Create("update-build-readme");
+        var layout = RepositoryLayout.Locate();
+        var source = await ScaffoldSource.CreateAsync(workspace, layout);
+        var target = ScaffoldTestContext.CreateConsumerRepository(workspace);
+
+        var init = await ScaffoldTestContext.RunInitAsync(source, target);
+        ScaffoldTestContext.AssertSucceeded(init, "init");
+
+        var buildFile = Path.Combine(target.RootPath, "build", "build.cs");
+        await File.AppendAllTextAsync(buildFile, "\n// consumer entry customization\n");
+
+        source.CommitChange(
+            "scaffold/build/README.md",
+            text => text + "\n<!-- updated managed build guide -->\n");
+        var newSha = source.HeadSha;
+        var update = await ScaffoldTestContext.RunUpdateAsync(target, source, newSha);
+        ScaffoldTestContext.AssertSucceeded(update, "update");
+
+        var sourceReadme = Path.Combine(source.ScaffoldBuildPath, "README.md");
+        var installedReadme = Path.Combine(target.RootPath, "build", "README.md");
+        Assert.True(File.Exists(installedReadme), "Update removed build/README.md.");
+        Assert.Equal(
+            await File.ReadAllBytesAsync(sourceReadme),
+            await File.ReadAllBytesAsync(installedReadme));
+        Assert.Contains(
+            "updated managed build guide",
+            await File.ReadAllTextAsync(installedReadme),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "consumer entry customization",
+            await File.ReadAllTextAsync(buildFile),
+            StringComparison.Ordinal);
+
+        var lockFile = PlutoniumLockFile.Load(Path.Combine(target.RootPath, "build", "plutonium.lock"));
+        Assert.Equal(
+            Hashing.Sha256File(sourceReadme),
+            lockFile.GetHash("build/README.md"));
+        Assert.Equal(newSha, lockFile.GetValue("scaffold_commit"));
+
+    }
+
     /// <summary>Running the same update twice produces an identical tree.</summary>
     [Fact]
     public async Task Update_IsIdempotent()
