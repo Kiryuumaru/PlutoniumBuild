@@ -13,7 +13,7 @@ PlutoniumBuild is a build-automation scaffold. You describe Test, Build, and Pub
 Run the installer from the root of the repository you want to build. Check each item before writing anything:
 
 - `git` is on `PATH`; the installer fetches the scaffold with it.
-- The PlutoniumBuild source repository is public, and `<release-sha>` comes from the published release notes. Both are release-gated.
+- The PlutoniumBuild source repository is public, and the pinned release commit `6aec14937739661d9c24affffaa6c8928c1f2655` is published. Both are release-gated.
 - The repository has at least one commit. The sample Build and Publish steps call `git rev-parse` and `git describe` against `HEAD`.
 - No `build/` directory exists. The installer refuses an existing scaffold; use `build/update.sh` to update one.
 - No root `build.sh`, `build.ps1`, or `build.cmd` exists. Move existing files aside first.
@@ -25,13 +25,13 @@ Run the installer from the root of the repository you want to build. Check each 
 ### Linux and macOS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.sh | bash -s -- --sha <release-sha>
+curl -fsSL https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.sh | bash -s -- --sha 6aec14937739661d9c24affffaa6c8928c1f2655
 ```
 
 Prefer to inspect the script before running it? Download it to `init.sh.new` first:
 
 ```bash
-rm -f init.sh.new && curl -fsSL -o init.sh.new https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.sh
+rm -f init.sh.new && curl -fsSL -o init.sh.new https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.sh
 ```
 
 Download to a fresh file. Do not run a leftover `init.sh.new` from an earlier attempt.
@@ -39,7 +39,7 @@ Download to a fresh file. Do not run a leftover `init.sh.new` from an earlier at
 Inspect `init.sh.new`, then run it:
 
 ```bash
-mv init.sh.new init.sh && bash init.sh --sha <release-sha>
+mv init.sh.new init.sh && bash init.sh --sha 6aec14937739661d9c24affffaa6c8928c1f2655
 ```
 
 ### Windows
@@ -47,13 +47,13 @@ mv init.sh.new init.sh && bash init.sh --sha <release-sha>
 Download the installer with `-ErrorAction Stop`, inspect the file, then run it from PowerShell:
 
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/<release-sha>/init.ps1 -OutFile init.ps1 -ErrorAction Stop
-powershell -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -Sha <release-sha>
+Invoke-WebRequest https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.ps1 -OutFile init.ps1 -ErrorAction Stop
+powershell -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -Sha 6aec14937739661d9c24affffaa6c8928c1f2655
 ```
 
 Download to a fresh file. Do not run an `init.ps1` left over from an earlier attempt.
 
-`<release-sha>` in the install commands is a placeholder for the full 40-character release commit SHA. Take that SHA only from the published release notes. Never substitute a branch name, `main`, or an untrusted SHA. The follow-up release PR replaces the placeholder in `README.md`, `docs/package-readme.md`, and `INIT.md`; the installed `build/README.md` is not changed because its links point at `main`.
+The install commands pin the full 40-character release commit SHA `6aec14937739661d9c24affffaa6c8928c1f2655`. Never substitute a branch name, `main`, or an untrusted SHA. The installed `build/README.md` is not changed because its links point at `main`.
 
 The installer fetches exactly that commit and verifies every managed file against `build/plutonium.lock`. It refuses a credential-bearing `--source` (`-Source` on Windows), installs atomically, and never edits your solution or adds projects to it.
 
@@ -168,7 +168,7 @@ The updater replaces managed files and bumps the `PlutoniumBuild` package pin. I
 ## Troubleshooting and where to read next
 
 - The installer refuses because `build/` exists: run `build/update.sh --sha <new-release-sha>` instead.
-- The fetch fails: check that `<release-sha>` is a full 40-character commit SHA and that the source repository is reachable.
+- The fetch fails: check that the pinned SHA is a full 40-character commit SHA and that the source repository is reachable.
 - Restore fails: check that the `PlutoniumBuild` package version in `build/build.csproj` is available on nuget.org.
 - Workflow generation fails: check the `WorkflowConfig` name (lowercase letters, digits, and hyphens) and each entry id (ASCII letters, digits, `_`, and `-`, starting with a letter or `_`).
 
