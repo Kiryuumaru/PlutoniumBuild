@@ -1,0 +1,109 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Publish the current package version to nuget.org
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-nuget
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to nuget.org
+    if: inputs.confirm == true && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+
+      - name: Verify scaffold lock
+        shell: bash
+        run: bash scaffold/lock.sh verify
+
+      - name: Resolve pinned SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          . scaffold/build/bootstrap.sh
+          plutonium_bootstrap "$PWD/global.json" "$PWD/.plutonium/temp" "$PWD/scaffold/build/plutonium.lock"
+          echo "DOTNET_EXE=$PLUTONIUM_DOTNET_EXE" >> "$GITHUB_ENV"
+          echo "DOTNET_ROOT=$PLUTONIUM_DOTNET_ROOT" >> "$GITHUB_ENV"
+          echo "$PLUTONIUM_DOTNET_ROOT" >> "$GITHUB_PATH"
+
+      - name: Build and test
+        shell: bash
+        run: ./build.sh
+
+      - name: Pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          "$DOTNET_EXE" pack src/PlutoniumBuild.Package/PlutoniumBuild.Package.csproj \
+            --configuration Release \
+            --output artifacts \
+            --nologo
+
+      - name: Read package version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$("$DOTNET_EXE" msbuild src/PlutoniumBuild.Package/PlutoniumBuild.Package.csproj \
+            -getProperty:PackageVersion -nologo | tail -1 | tr -d '\r')
+          if [ -z "$version" ]; then
+            echo "::error::Could not read PackageVersion."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse to republish an existing version
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          url="https://api.nuget.org/v3-flatcontainer/plutoniumbuild/${VERSION}/plutoniumbuild.${VERSION}.nupkg"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' "$url")
+          case "$code" in
+            404)
+              echo "Version ${VERSION} is not published yet."
+              ;;
+            200)
+              echo "::error::Version ${VERSION} already exists on nuget.org; bump the version before publishing."
+              exit 1
+              ;;
+            *)
+              echo "::error::Unexpected nuget.org response (${code}) for ${url}."
+              exit 1
+              ;;
+          esac
+
+      - name: Push
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          NUGET_AUTH_TOKEN: ${{ secrets.NUGET_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NUGET_AUTH_TOKEN:-}" ]; then
+            echo "::error::NUGET_AUTH_TOKEN is not configured."
+            exit 1
+          fi
+          "$DOTNET_EXE" nuget push "artifacts/PlutoniumBuild.${VERSION}.nupkg" \
+            --api-key "$NUGET_AUTH_TOKEN" \
+            --source https://api.nuget.org/v3/index.json \
+            --no-symbols

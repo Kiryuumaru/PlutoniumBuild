@@ -1,0 +1,4 @@
+# Bootstrapped SDK, installer payloads, update journals, and build output.
+temp/
+bin/
+obj/

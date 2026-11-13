@@ -1,4 +1,13 @@
 using Xunit;
+using Plutonium.Core;
+using Plutonium.Core.Runner;
+using Plutonium.Core.Logging;
+using Plutonium.Core.FileSystem;
+using Plutonium.Core.Process;
+using Plutonium.Core.Process.Tools;
+using Plutonium.Core.Hosting;
+using Plutonium.Core.Workflows;
+using Plutonium.Core.Workflows.Emitters;
 
 namespace Plutonium.Core.Tests;
 
@@ -50,6 +59,15 @@ public sealed class PipelineContractNamingTests
     public void ConditionOutputName_FormatsDashId()
     {
         Assert.Equal("MY_JOB_CONDITION", PlutoniumPipelineContract.ConditionOutputName("my-job"));
+    }
+
+    /// <summary>
+    /// Verifies the entry selector environment variable name stays the documented wire name.
+    /// </summary>
+    [Fact]
+    public void EntryVariableName_IsFrozenWireName()
+    {
+        Assert.Equal("PLUTONIUM_ENTRY", PlutoniumPipelineContract.EntryVariableName);
     }
 
     /// <summary>

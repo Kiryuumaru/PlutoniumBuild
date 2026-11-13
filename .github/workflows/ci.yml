@@ -1,0 +1,141 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pre-setup:
+    name: Pre Setup
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Verify scaffold lock
+        shell: bash
+        run: bash scaffold/lock.sh verify
+      - name: Run bash scaffold smoke
+        shell: bash
+        run: |
+          bash scaffold/smoke/source-credentials.sh
+          bash scaffold/smoke/lock-contract.sh
+          bash scaffold/smoke/preserve-drift.sh
+          bash scaffold/smoke/update-rollback.sh
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $failures = 0
+          $files = Get-ChildItem -Recurse -Filter *.ps1 | Where-Object {
+            $_.FullName -notmatch '[\\/]\.(inspirations|plutonium)[\\/]'
+          }
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              $failures++
+              Write-Host "Parse failure: $($file.FullName)"
+              $errors | ForEach-Object { Write-Host $_.Message }
+            }
+          }
+          if ($failures -gt 0) { exit 1 }
+          Write-Host "Parsed $($files.Count) PowerShell files."
+      - name: Compute matrix
+        id: matrix
+        shell: bash
+        run: |
+          matrix='{"os":["ubuntu-latest","windows-latest"]}'
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  scaffold-smoke:
+    name: Scaffold smoke (${{ matrix.os }})
+    needs: pre-setup
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.pre-setup.outputs.matrix) }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Run PowerShell scaffold smoke (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: pwsh
+        run: ./scaffold/smoke/powershell-smoke.ps1 -SkipBuild
+      - name: Run PowerShell scaffold smoke (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./scaffold/smoke/powershell-smoke.ps1
+
+  test:
+    name: Build and test (${{ matrix.os }})
+    needs: pre-setup
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.pre-setup.outputs.matrix) }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build and test (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: ./build.sh
+      - name: Build and test (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: .\build.cmd
+
+  post-setup:
+    name: Post Setup
+    needs:
+      - pre-setup
+      - scaffold-smoke
+      - test
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify required job results
+        shell: bash
+        env:
+          PRE_SETUP_RESULT: ${{ needs.pre-setup.result }}
+          SCAFFOLD_SMOKE_RESULT: ${{ needs.scaffold-smoke.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          set -euo pipefail
+          failed=0
+          for entry in \
+            "pre-setup:$PRE_SETUP_RESULT" \
+            "scaffold-smoke:$SCAFFOLD_SMOKE_RESULT" \
+            "test:$TEST_RESULT"; do
+            job=${entry%%:*}
+            result=${entry#*:}
+            if [ "$result" != "success" ]; then
+              echo "::error::Required job '$job' finished with '$result'."
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+          echo "All required jobs succeeded."

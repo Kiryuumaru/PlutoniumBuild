@@ -1,4 +1,13 @@
 using Xunit;
+using Plutonium.Core;
+using Plutonium.Core.Runner;
+using Plutonium.Core.Logging;
+using Plutonium.Core.FileSystem;
+using Plutonium.Core.Process;
+using Plutonium.Core.Process.Tools;
+using Plutonium.Core.Hosting;
+using Plutonium.Core.Workflows;
+using Plutonium.Core.Workflows.Emitters;
 
 namespace Plutonium.Core.Tests;
 
@@ -28,6 +37,25 @@ public sealed class WorkflowDocumentYamlTests
 
         Assert.Contains("PRE_SETUP_PLUTONIUM_PRE_SETUP: ${{ steps.PRE_SETUP_RUN.outputs.PRE_SETUP_PLUTONIUM_PRE_SETUP }}", yaml, StringComparison.Ordinal);
         Assert.Contains("MY_JOB_CONDITION: ${{ steps.PRE_SETUP_RUN.outputs.MY_JOB_CONDITION }}", yaml, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Verifies job-level permissions render under the job, after <c>runs-on</c>.
+    /// </summary>
+    [Fact]
+    public void WriteYaml_EmitsJobPermissions()
+    {
+        var job = new PlutoniumWorkflowJob(
+            "POST_SETUP",
+            "ubuntu-22.04",
+            ["- run: echo"],
+            permissions: new Dictionary<string, string>(StringComparer.Ordinal) { ["contents"] = "write" });
+        var document = new PlutoniumWorkflowDocument("Pipe", "push:", [job]);
+
+        var yaml = document.WriteYaml();
+
+        Assert.Contains("    permissions:\n      contents: write", yaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("env:", yaml, StringComparison.Ordinal);
     }
 
     /// <summary>

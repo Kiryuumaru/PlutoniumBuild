@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <RootNamespace>Plutonium.Shell</RootNamespace>
+    <AssemblyName>Plutonium.Shell</AssemblyName>
+    <Description>CLI shell for PlutoniumBuild (ApplicationBuilderHelpers-based).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ApplicationBuilderHelpers" Version="4.1.160" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Plutonium.Core\Plutonium.Core.csproj" />
+    <ProjectReference Include="..\Plutonium.Helpers\Plutonium.Helpers.csproj" />
+  </ItemGroup>
+
+</Project>

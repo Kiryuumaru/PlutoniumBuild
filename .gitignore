@@ -5,6 +5,12 @@
 # Build output excluded
 bin/
 obj/
+artifacts/
+*.nupkg
+*.snupkg
+
+# Runner scratch: bootstrapped .NET SDK and installer download
+.plutonium/temp/
 
 # Confirmed doc exclusions
 HANDOVER.md
