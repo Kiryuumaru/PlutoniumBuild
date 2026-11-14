@@ -64,9 +64,11 @@ internal static class ScaffoldTestContext
             "--source",
             source.SourcePath,
         };
+        var literalArgumentIndexes = new List<int>();
         if (refName is not null)
         {
             arguments.Add("--ref");
+            literalArgumentIndexes.Add(arguments.Count);
             arguments.Add(refName);
         }
         else if (!useDefaultRef)
@@ -76,7 +78,11 @@ internal static class ScaffoldTestContext
         }
 
         arguments.AddRange(extraArguments);
-        return await RunScriptAsync(source.InitScriptPath, arguments, target.RootPath);
+        return await RunScriptAsync(
+            source.InitScriptPath,
+            arguments,
+            target.RootPath,
+            literalArgumentIndexes: literalArgumentIndexes);
     }
 
     internal static async Task<ProcessResult> RunUpdateAsync(
@@ -96,9 +102,11 @@ internal static class ScaffoldTestContext
             arguments.Add(source.SourcePath);
         }
 
+        var literalArgumentIndexes = new List<int>();
         if (refName is not null)
         {
             arguments.Add("--ref");
+            literalArgumentIndexes.Add(arguments.Count);
             arguments.Add(refName);
         }
         else if (sha is not null)
@@ -108,14 +116,19 @@ internal static class ScaffoldTestContext
         }
 
         arguments.AddRange(extraArguments);
-        return await RunScriptAsync(updateScript, arguments, target.RootPath);
+        return await RunScriptAsync(
+            updateScript,
+            arguments,
+            target.RootPath,
+            literalArgumentIndexes: literalArgumentIndexes);
     }
 
     internal static Task<ProcessResult> RunScriptAsync(
         string scriptPath,
         IReadOnlyList<string> arguments,
         string workingDirectory,
-        IReadOnlyDictionary<string, string?>? environmentOverrides = null)
+        IReadOnlyDictionary<string, string?>? environmentOverrides = null,
+        IReadOnlyCollection<int>? literalArgumentIndexes = null)
     {
         var environment = CreateScriptEnvironment(workingDirectory);
         if (environmentOverrides is not null)
@@ -131,7 +144,8 @@ internal static class ScaffoldTestContext
             arguments,
             workingDirectory,
             environment,
-            TimeSpan.FromMinutes(10));
+            TimeSpan.FromMinutes(10),
+            literalArgumentIndexes);
     }
 
     internal static PlutoniumLockFile ReadLock(GitRepository target)

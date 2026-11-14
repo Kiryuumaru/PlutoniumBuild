@@ -172,13 +172,20 @@ public static class ProcessHarness
     /// <param name="workingDirectory">The working directory.</param>
     /// <param name="environment">Environment overrides.</param>
     /// <param name="timeout">The maximum run time.</param>
+    /// <param name="literalArgumentIndexes">
+    /// Zero-based indexes of arguments that are grammar tokens rather than
+    /// paths, such as ref names. Those arguments reach the script unchanged on
+    /// every platform; every other argument has its separators normalized for
+    /// bash.
+    /// </param>
     /// <returns>The captured result.</returns>
     public static Task<ProcessResult> RunBashAsync(
         string scriptPath,
         IReadOnlyList<string> arguments,
         string? workingDirectory = null,
         IReadOnlyDictionary<string, string?>? environment = null,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        IReadOnlyCollection<int>? literalArgumentIndexes = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scriptPath);
         var executable = ResolveBashExecutable();
@@ -186,7 +193,7 @@ public static class ProcessHarness
         {
             ToBashPath(scriptPath),
         };
-        allArguments.AddRange(arguments.Select(ToBashPath));
+        allArguments.AddRange(NormalizeBashArguments(arguments, literalArgumentIndexes));
         return RunAsync(
             new ProcessRequest(
                 executable,
@@ -194,6 +201,48 @@ public static class ProcessHarness
                 workingDirectory,
                 PrepareBashEnvironment(executable, environment),
                 timeout));
+    }
+
+    /// <summary>
+    /// Normalizes path-shaped bash arguments for the host platform while
+    /// forwarding literal arguments unchanged. A ref name is git grammar, not a
+    /// path: rewriting its backslash on Windows would turn a malformed ref into
+    /// a different, valid ref and hide the rejection under test.
+    /// </summary>
+    /// <param name="arguments">The arguments forwarded to the script.</param>
+    /// <param name="literalArgumentIndexes">Zero-based indexes to forward unchanged.</param>
+    /// <returns>The argument list to pass to bash.</returns>
+    internal static IReadOnlyList<string> NormalizeBashArguments(
+        IReadOnlyList<string> arguments,
+        IReadOnlyCollection<int>? literalArgumentIndexes)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (literalArgumentIndexes is null || literalArgumentIndexes.Count == 0)
+        {
+            return arguments.Select(ToBashPath).ToArray();
+        }
+
+        var literalIndexes = new HashSet<int>(literalArgumentIndexes);
+        foreach (var index in literalIndexes)
+        {
+            if (index < 0 || index >= arguments.Count)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(literalArgumentIndexes),
+                    index,
+                    "The literal argument index is outside the argument list.");
+            }
+        }
+
+        var normalized = new string[arguments.Count];
+        for (var index = 0; index < arguments.Count; index++)
+        {
+            normalized[index] = literalIndexes.Contains(index)
+                ? arguments[index]
+                : ToBashPath(arguments[index]);
+        }
+
+        return normalized;
     }
 
     /// <summary>
