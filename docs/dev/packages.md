@@ -81,9 +81,9 @@ The workflow requests `id-token: write` only on the confirmed main dispatch and
 uses no deployment environment, GitHub Packages, tags, or releases. See
 `docs/adr/0002-nuget-trusted-publishing.md` for the policy fields and cutover.
 
-Publishing is release-gated: the 0.1.0 package must be pushed to nuget.org
-before `dotnet add package PlutoniumBuild` resolves. The raw installer has a
-separate gate: the repository must be public and the release commit must exist.
+The 0.1.0 package is published on nuget.org, so `dotnet add package
+PlutoniumBuild` resolves. The raw installer requires a public repository and
+resolves the requested revision (default: `main`) to a full commit SHA.
 Publishing does not require a public repository.
 
 See the authoritative scope in `docs/concepts/scope.md`.

@@ -29,6 +29,7 @@ public sealed class RepositoryWorkflowPolicyTests
         "bash scaffold/smoke/lock-contract.sh",
         "bash scaffold/smoke/preserve-drift.sh",
         "bash scaffold/smoke/update-rollback.sh",
+        "bash scaffold/smoke/ref-resolution.sh",
     ];
 
     /// <summary>

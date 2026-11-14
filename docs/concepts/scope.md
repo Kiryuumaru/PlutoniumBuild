@@ -170,21 +170,32 @@ Every Helpers-facing feature (see `docs/nuke_build_helpers/index.md`):
   `scaffold/root/`. The scaffold build app targets `net10.0` and references
   `PlutoniumBuild` `0.1.0`; `build.cs`, the isolation props/targets, and
   `build.slnx` are user-owned (see `docs/dev/architecture.md`).
-- One-line init: `init.sh` / `init.ps1` install the scaffold from a full
-  40-character commit SHA. Before writing, they reject credential-bearing
+- One-line init: `init.sh` / `init.ps1` install the scaffold from the default
+  branch (`main`) by default, resolving the requested revision to a full commit
+  SHA before fetch. `--ref` accepts a bare branch or tag name, a fully
+  qualified `refs/heads/...` or `refs/tags/...`, or a full 40-hex commit SHA;
+  a bare name that matches both a branch and a tag is rejected as ambiguous.
+  `--sha` selects an exact commit. `--ref` resolves once and can move; `--sha`
+  is an exact immutable pin. Before writing, they reject credential-bearing
   source URLs, require every payload file except the lock itself to be listed
-  as managed or preserve, enforce the lock/props/csproj version invariant, and
-  refuse symlinked or non-regular payloads; `init.ps1` also refuses
-  reparse-point destinations. They refuse an existing `build/` or conflicting
-  root wrappers and never touch the consumer solution. The raw installer URL
-  is release-gated by a public repository and a release commit. The nuget.org
-  package is published separately by the manual `publish.yml` workflow with
-  NuGet Trusted Publishing through GitHub OIDC (`NuGet/login`); no NuGet
-  secret is stored, and that workflow does not require a public repository.
+  as managed or preserve, reject a lock with non-canonical or duplicate
+  reserved keys, enforce the lock/props/csproj version invariant, and refuse
+  symlinked or non-regular payloads; `init.ps1` also refuses reparse-point
+  destinations. They refuse an existing `build/` or conflicting root wrappers
+  and never touch the consumer solution. The raw installer URL requires a
+  public repository; the resolved commit is recorded as `scaffold_commit` in
+  the lock. That commit is traceability, not authentication. The lock's
+  `source` is security-sensitive: a no-arg update fetches from it, and an
+  explicit `--source` re-homes the lock to the fetched source.
+  The nuget.org package is published separately by the manual `publish.yml`
+  workflow with NuGet Trusted Publishing through GitHub OIDC (`NuGet/login`);
+  no NuGet secret is stored, and that workflow does not require a public
+  repository.
 - Update flow: `build/update.sh` / `build/update.ps1` refresh managed files,
   bump the package pin, preserve `build/build.cs` and the user-owned props and
-  solution, journal a backup under `build/temp/update/<stamp>`, and roll back
-  on a failed smoke build, removing files added by the new lock.
+  solution, journal a backup under `build/temp/update/<stamp>`, run the fetched
+  bootstrap before committing the update, and roll back on a failed bootstrap
+  or smoke build, removing files added by the new lock.
 - SDK bootstrap: `scaffold/build/bootstrap.sh` / `.ps1` clear host and restore
   variables that can redirect the toolchain, require `sdk.version`,
   `sdk.rollForward`, and `sdk.allowPrerelease` in `build/global.json`, resolve
@@ -254,8 +265,9 @@ Distribution is built at 0.1.0:
 
 - One MIT NuGet package, `PlutoniumBuild`, embeds Core, Helpers, and Shell for
   `net10.0`.
-- `init.sh` / `init.ps1` install the pinned scaffold, and `build/update.*`
-  refreshes it while preserving user-owned files (see `docs/workflows.md`).
+- `init.sh` / `init.ps1` install the scaffold from the default branch or an
+  explicit `--ref`/`--sha` revision, and `build/update.*` refreshes it while
+  preserving user-owned files (see `docs/workflows.md`).
 
 Future `PlutoniumBuild.*` integration packages remain separate and unbuilt.
 

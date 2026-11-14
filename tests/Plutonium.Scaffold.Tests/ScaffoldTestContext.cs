@@ -24,9 +24,12 @@ internal static class ScaffoldTestContext
         EndGlobal
         """;
 
-    internal static GitRepository CreateConsumerRepository(TempWorkspace workspace, bool withSolution = true)
+    internal static GitRepository CreateConsumerRepository(
+        TempWorkspace workspace,
+        bool withSolution = true,
+        string name = "consumer")
     {
-        var repository = GitRepository.Create(workspace, "consumer");
+        var repository = GitRepository.Create(workspace, name);
         repository.WriteFile("sentinel.txt", "do not touch\n");
         repository.WriteFile("README.md", "# Consumer\n");
         if (withSolution)
@@ -50,6 +53,9 @@ internal static class ScaffoldTestContext
     internal static async Task<ProcessResult> RunInitAsync(
         ScaffoldSource source,
         GitRepository target,
+        string? refName = null,
+        bool useDefaultRef = false,
+        string? sha = null,
         params string[] extraArguments)
     {
         Assert.True(File.Exists(source.InitScriptPath), "Init script not found: " + source.InitScriptPath);
@@ -57,9 +63,18 @@ internal static class ScaffoldTestContext
         {
             "--source",
             source.SourcePath,
-            "--sha",
-            source.HeadSha,
         };
+        if (refName is not null)
+        {
+            arguments.Add("--ref");
+            arguments.Add(refName);
+        }
+        else if (!useDefaultRef)
+        {
+            arguments.Add("--sha");
+            arguments.Add(sha ?? source.HeadSha);
+        }
+
         arguments.AddRange(extraArguments);
         return await RunScriptAsync(source.InitScriptPath, arguments, target.RootPath);
     }
@@ -68,7 +83,9 @@ internal static class ScaffoldTestContext
         GitRepository target,
         ScaffoldSource source,
         string? sha = null,
-        bool includeSource = true)
+        bool includeSource = true,
+        string? refName = null,
+        params string[] extraArguments)
     {
         var updateScript = Path.Combine(target.RootPath, "build", "update.sh");
         Assert.True(File.Exists(updateScript), "Update script not found: " + updateScript);
@@ -79,12 +96,18 @@ internal static class ScaffoldTestContext
             arguments.Add(source.SourcePath);
         }
 
-        if (sha is not null)
+        if (refName is not null)
+        {
+            arguments.Add("--ref");
+            arguments.Add(refName);
+        }
+        else if (sha is not null)
         {
             arguments.Add("--sha");
             arguments.Add(sha);
         }
 
+        arguments.AddRange(extraArguments);
         return await RunScriptAsync(updateScript, arguments, target.RootPath);
     }
 
@@ -110,6 +133,106 @@ internal static class ScaffoldTestContext
             environment,
             TimeSpan.FromMinutes(10));
     }
+
+    internal static PlutoniumLockFile ReadLock(GitRepository target)
+    {
+        var path = Path.Combine(target.RootPath, "build", "plutonium.lock");
+        Assert.True(File.Exists(path), "Installed lock not found: " + path);
+        return PlutoniumLockFile.Load(path);
+    }
+
+    internal static string ReadScaffoldCommit(GitRepository target)
+    {
+        var value = ReadLock(target).GetValue("scaffold_commit");
+        Assert.False(string.IsNullOrWhiteSpace(value), "The installed lock has no scaffold_commit.");
+        Assert.Matches("^[0-9a-f]{40}$", value!);
+        return value!;
+    }
+
+    internal static void AssertScaffoldCommit(GitRepository target, string expected)
+    {
+        var actual = ReadScaffoldCommit(target);
+        Assert.Equal(expected, actual);
+        Assert.DoesNotContain("refs/", actual, StringComparison.Ordinal);
+    }
+
+    internal static IReadOnlyDictionary<string, string> ReadUpdateJournal(GitRepository target)
+    {
+        var updateRoot = Path.Combine(target.RootPath, "build", "temp", "update");
+        Assert.True(Directory.Exists(updateRoot), "Update journal directory not found: " + updateRoot);
+        var journalPath = Directory.GetFiles(updateRoot, "journal.txt", SearchOption.AllDirectories).Single();
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var line in File.ReadAllLines(journalPath))
+        {
+            var separator = line.IndexOf('=');
+            if (separator > 0)
+            {
+                values[line[..separator]] = line[(separator + 1)..];
+            }
+        }
+
+        return values;
+    }
+
+    internal static async Task<string> ResolveGitPathAsync(TempWorkspace workspace)
+    {
+        var probePath = workspace.PathFor("resolve-git.sh");
+        await File.WriteAllTextAsync(
+            probePath,
+            """
+            #!/usr/bin/env bash
+            command -v git
+            """);
+        var probe = await ProcessHarness.RunBashAsync(probePath, [], workspace.Root);
+        Assert.True(probe.Succeeded, "Could not resolve git." + Environment.NewLine + probe.Describe());
+        var path = probe.StandardOutput.Trim();
+        Assert.False(string.IsNullOrWhiteSpace(path), "git was not found on PATH.");
+        return path;
+    }
+
+    internal static FakeToolchain CreateLoggingGitShim(
+        TempWorkspace workspace,
+        string realGitPath,
+        string logPath)
+    {
+        var toolchain = FakeToolchain.Create(workspace);
+        toolchain.AddDotNet("10.0.402", 0);
+        toolchain.AddShim(
+            "git",
+            """
+            #!/usr/bin/env bash
+            printf '%s\n' "$*" >> "$GIT_LOG"
+            exec "$REAL_GIT" "$@"
+            """,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["REAL_GIT"] = realGitPath,
+                ["GIT_LOG"] = ToBashPath(logPath),
+            });
+        return toolchain;
+    }
+
+    internal static FakeToolchain CreateGitInvocationProbe(
+        TempWorkspace workspace,
+        string markerPath)
+    {
+        var toolchain = FakeToolchain.Create(workspace);
+        toolchain.AddShim(
+            "git",
+            """
+            #!/usr/bin/env bash
+            printf 'invoked\n' > "$GIT_MARKER"
+            exit 1
+            """,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["GIT_MARKER"] = ToBashPath(markerPath),
+            });
+        return toolchain;
+    }
+
+    internal static string ToBashPath(string path) =>
+        OperatingSystem.IsWindows() ? path.Replace('\\', '/') : path;
 
     /// <summary>
     /// Builds the environment for scaffold scripts. <c>TMPDIR</c> is scoped to
@@ -179,6 +302,91 @@ internal static class ScaffoldTestContext
     {
         ArgumentNullException.ThrowIfNull(value);
         return value.Replace('\\', '/').TrimEnd('/');
+    }
+
+    internal enum LockPoison
+    {
+        PrefixedSource,
+        PrefixedScaffoldCommit,
+        NonCanonicalSource,
+        DuplicateFormat,
+        ShortScaffoldCommit,
+        MissingFormat,
+    }
+
+    internal static string ApplyLockPoison(string content, LockPoison poison)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+
+        var normalized = content.Replace("\r\n", "\n", StringComparison.Ordinal);
+        var trailingNewline = normalized.EndsWith('\n');
+        var lines = normalized.Split('\n').ToList();
+        if (trailingNewline)
+        {
+            lines.RemoveAt(lines.Count - 1);
+        }
+
+        switch (poison)
+        {
+            case LockPoison.PrefixedSource:
+                PrefixLockLine(lines, "source=");
+                break;
+            case LockPoison.PrefixedScaffoldCommit:
+                PrefixLockLine(lines, "scaffold_commit=");
+                break;
+            case LockPoison.NonCanonicalSource:
+                var sourceIndex = lines.FindIndex(
+                    line => line.StartsWith("source=", StringComparison.Ordinal));
+                Assert.True(sourceIndex >= 0, "The lock has no line starting with 'source='.");
+                lines[sourceIndex] = "source = " + lines[sourceIndex]["source=".Length..];
+                break;
+            case LockPoison.DuplicateFormat:
+                lines.Add("format=1");
+                break;
+            case LockPoison.ShortScaffoldCommit:
+                ReplaceLockLine(lines, "scaffold_commit=", "scaffold_commit=abc1234");
+                break;
+            case LockPoison.MissingFormat:
+                Assert.True(
+                    lines.RemoveAll(line => line.StartsWith("format=", StringComparison.Ordinal)) == 1,
+                    "The lock must carry exactly one canonical format key.");
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(poison), poison, "Unknown lock poison.");
+        }
+
+        return string.Join("\n", lines) + (trailingNewline ? "\n" : string.Empty);
+    }
+
+    internal static string LockPoisonMessage(LockPoison poison) => poison switch
+    {
+        LockPoison.PrefixedSource => "reserved key source must start at column 0",
+        LockPoison.PrefixedScaffoldCommit => "reserved key scaffold_commit must start at column 0",
+        LockPoison.NonCanonicalSource => "reserved key source has a non-canonical form",
+        LockPoison.DuplicateFormat => "duplicate reserved key format",
+        LockPoison.ShortScaffoldCommit => "scaffold_commit must be a full 40-character commit SHA",
+        LockPoison.MissingFormat => "missing required key format",
+        _ => throw new ArgumentOutOfRangeException(nameof(poison), poison, "Unknown lock poison."),
+    };
+
+    internal static void WriteLockPoison(string path, LockPoison poison)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        File.WriteAllText(path, ApplyLockPoison(File.ReadAllText(path), poison));
+    }
+
+    private static void PrefixLockLine(List<string> lines, string prefix)
+    {
+        var index = lines.FindIndex(line => line.StartsWith(prefix, StringComparison.Ordinal));
+        Assert.True(index >= 0, "The lock has no line starting with '" + prefix + "'.");
+        lines[index] = " " + lines[index];
+    }
+
+    private static void ReplaceLockLine(List<string> lines, string prefix, string replacement)
+    {
+        var index = lines.FindIndex(line => line.StartsWith(prefix, StringComparison.Ordinal));
+        Assert.True(index >= 0, "The lock has no line starting with '" + prefix + "'.");
+        lines[index] = replacement;
     }
 
     private static ScaffoldManifest LoadManifest()
