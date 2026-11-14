@@ -22,6 +22,30 @@ copy_scaffold() {
     cp "$ROOT/src/Directory.Build.props" "$destination/src/Directory.Build.props"
 }
 
+poison_lock() {
+    local file="$1" poison="$2"
+    case "$poison" in
+        prefixed-source) sed -i 's/^source=/ source=/' "$file" ;;
+        prefixed-scaffold-commit) sed -i 's/^scaffold_commit=/ scaffold_commit=/' "$file" ;;
+        non-canonical-source) sed -i 's/^source=/source =/' "$file" ;;
+        duplicate-format) printf 'format=1\n' >> "$file" ;;
+        short-scaffold-commit) sed -i 's/^scaffold_commit=.*/scaffold_commit=abc1234/' "$file" ;;
+        missing-format) sed -i '/^format=/d' "$file" ;;
+        *) fail "unknown lock poison '$poison'."; return 1 ;;
+    esac
+}
+
+poison_message() {
+    case "$1" in
+        prefixed-source) echo 'reserved key source must start at column 0' ;;
+        prefixed-scaffold-commit) echo 'reserved key scaffold_commit must start at column 0' ;;
+        non-canonical-source) echo 'reserved key source has a non-canonical form' ;;
+        duplicate-format) echo 'duplicate reserved key format' ;;
+        short-scaffold-commit) echo 'scaffold_commit must be a full 40-character commit SHA' ;;
+        missing-format) echo 'missing required key format' ;;
+    esac
+}
+
 # Lock verify must reject an unlisted build payload file.
 copy_scaffold "$WORK/unlisted-build"
 echo 'unlisted' > "$WORK/unlisted-build/scaffold/build/extra.txt"
@@ -62,6 +86,37 @@ if bash "$WORK/duplicate/scaffold/lock.sh" verify >"$OUT" 2>&1; then
 elif ! grep -q 'duplicate managed entries' "$OUT"; then
     fail "lock verify did not report duplicate managed entries."
 fi
+rm -f "$OUT"
+
+# Reserved keys must be canonical, unique, and present; verify and write must
+# reject a poisoned lock without rewriting it.
+for poison in \
+    prefixed-source \
+    prefixed-scaffold-commit \
+    non-canonical-source \
+    duplicate-format \
+    short-scaffold-commit \
+    missing-format; do
+    poisoned="$WORK/poison-$poison"
+    copy_scaffold "$poisoned"
+    poisoned_lock="$poisoned/scaffold/build/plutonium.lock"
+    poison_lock "$poisoned_lock" "$poison"
+    poisoned_hash=$(sha256sum "$poisoned_lock" | awk '{print $1}')
+    expected=$(poison_message "$poison")
+    if bash "$poisoned/scaffold/lock.sh" verify >"$OUT" 2>&1; then
+        fail "lock verify accepted $poison."
+    elif ! grep -Fq "$expected" "$OUT"; then
+        fail "lock verify did not report $poison."
+    fi
+    if bash "$poisoned/scaffold/lock.sh" write >"$OUT" 2>&1; then
+        fail "lock write accepted $poison."
+    elif ! grep -Fq "$expected" "$OUT"; then
+        fail "lock write did not report $poison."
+    fi
+    if [ "$(sha256sum "$poisoned_lock" | awk '{print $1}')" != "$poisoned_hash" ]; then
+        fail "lock write changed the lock for $poison."
+    fi
+done
 rm -f "$OUT"
 
 # src/Directory.Build.props participates in the package-version invariant.

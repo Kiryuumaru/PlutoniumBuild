@@ -59,10 +59,11 @@ username, not the repository owner if the two differ. Renaming or moving
 `publish.yml` requires updating the policy to the new file name before the next
 publish.
 
-The repository is private, so a new policy may start temporarily active for
-seven days. A successful publish in that window makes it permanently active. If no
-publish happens within seven days, the policy becomes inactive and the window
-must be restarted.
+When the repository was private, a new policy could start temporarily active
+for seven days. Under NuGet's documented behavior, a successful publish in that
+window makes the policy permanently active; if no publish happens within seven
+days, the policy becomes inactive and the window must be restarted. The
+repository is now public.
 
 ## Consequences
 

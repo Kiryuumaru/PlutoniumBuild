@@ -13,25 +13,38 @@ PlutoniumBuild is a build-automation scaffold. You describe Test, Build, and Pub
 Run the installer from the root of the repository you want to build. Check each item before writing anything:
 
 - `git` is on `PATH`; the installer fetches the scaffold with it.
-- The PlutoniumBuild source repository is public, and the pinned release commit `6aec14937739661d9c24affffaa6c8928c1f2655` is published. Both are release-gated.
+- The PlutoniumBuild source repository is public and reachable. The installer resolves the default branch (`main`) unless you pass `--ref` or `--sha`.
 - The repository has at least one commit. The sample Build and Publish steps call `git rev-parse` and `git describe` against `HEAD`.
 - No `build/` directory exists. The installer refuses an existing scaffold; use `build/update.sh` to update one.
 - No root `build.sh`, `build.ps1`, or `build.cmd` exists. Move existing files aside first.
 - .NET SDK `10.0.402` is pinned. The launcher bootstraps it under `build/temp` when no usable `dotnet` is on `PATH`.
-- The `PlutoniumBuild` package must be available on nuget.org. The build app references it by version.
+- The `PlutoniumBuild` package is published on nuget.org. The build app references it by version.
 
 ## Install
 
 ### Linux and macOS
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.sh | bash -s -- --sha 6aec14937739661d9c24affffaa6c8928c1f2655
+curl -fsSL -o init.sh https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/main/init.sh && bash init.sh
 ```
+
+The download and the run are joined with `&&`, so a failed download stops before anything executes.
+
+To pin a revision, pass `--ref <tag-or-branch>` or `--sha <full-commit>`. They are mutually exclusive:
+
+```bash
+bash init.sh --ref <tag-or-branch>
+bash init.sh --ref v1.0
+bash init.sh --ref refs/tags/v1.0
+bash init.sh --sha <full-commit>
+```
+
+`--ref` accepts a bare branch or tag name, a fully qualified `refs/heads/...` or `refs/tags/...`, or a full 40-hex commit SHA. A bare name such as `v1.0` or `release/1.0` resolves a tag or branch. A bare name that matches both a branch and a tag is rejected as ambiguous; pass the fully qualified form. `--ref` resolves the name once at install time, so a branch or tag can move later. Use `--sha` for an exact immutable pin.
 
 Prefer to inspect the script before running it? Download it to `init.sh.dl` first:
 
 ```bash
-rm -f init.sh.dl && curl -fsSL -o init.sh.dl https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.sh
+rm -f init.sh.dl && curl -fsSL -o init.sh.dl https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/main/init.sh
 ```
 
 Download to a fresh file. Do not run a leftover `init.sh.dl` from an earlier attempt.
@@ -39,7 +52,7 @@ Download to a fresh file. Do not run a leftover `init.sh.dl` from an earlier att
 Inspect `init.sh.dl`, then run it:
 
 ```bash
-mv init.sh.dl init.sh && bash init.sh --sha 6aec14937739661d9c24affffaa6c8928c1f2655
+mv init.sh.dl init.sh && bash init.sh
 ```
 
 ### Windows
@@ -47,15 +60,19 @@ mv init.sh.dl init.sh && bash init.sh --sha 6aec14937739661d9c24affffaa6c8928c1f
 Download the installer with `-ErrorAction Stop`, inspect the file, then run it from PowerShell:
 
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.ps1 -OutFile init.ps1 -ErrorAction Stop
-powershell -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -Sha 6aec14937739661d9c24affffaa6c8928c1f2655
+Invoke-WebRequest https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/main/init.ps1 -OutFile init.ps1 -ErrorAction Stop
+powershell -NoProfile -ExecutionPolicy Bypass -File .\init.ps1
 ```
 
 Download to a fresh file. Do not run an `init.ps1` left over from an earlier attempt.
 
-The install commands pin the full 40-character release commit SHA `6aec14937739661d9c24affffaa6c8928c1f2655`. Never substitute a branch name, `main`, or an untrusted SHA. The installed `build/README.md` is not changed because its links point at `main`.
+To pin a revision on Windows, add `-Ref <tag-or-branch>` or `-Sha <full-commit>`.
 
-The installer fetches exactly that commit and verifies every managed file against `build/plutonium.lock`. It refuses a credential-bearing `--source` (`-Source` on Windows), installs atomically, and never edits your solution or adds projects to it.
+With no arguments, the install commands resolve the default branch (`main`) to a full commit SHA before fetching. `--ref` accepts a bare branch or tag name, a fully qualified `refs/heads/...` or `refs/tags/...`, or a full 40-hex commit SHA; a bare name that matches both a branch and a tag is rejected as ambiguous. `--sha` accepts only a full commit SHA. The two are mutually exclusive. The resolved commit is recorded as `scaffold_commit` in `build/plutonium.lock`; that commit is traceability, not authentication. Branch-latest is trust-on-first-use; a compromised default branch runs code. The same-payload lock hashes detect corruption or mismatch, not upstream compromise.
+
+The lock's `source` is security-sensitive: a no-arg update fetches from that source. An explicit `--source` re-homes the lock to the fetched source. The lock must use canonical reserved keys with no duplicates; a non-canonical or duplicate-key lock is rejected. The installed `build/README.md` is not changed because its links point at `main`.
+
+The installer resolves the requested revision to a full commit SHA before fetching and verifies every managed file against `build/plutonium.lock`. It refuses a credential-bearing `--source` (`-Source` on Windows), installs atomically, and never edits your solution or adds projects to it.
 
 ## What install creates
 
@@ -144,16 +161,18 @@ On GitHub, `EntryIds` limits the secret to the named entry jobs; `publish` match
 ## Update
 
 ```bash
-build/update.sh --sha <new-release-sha>
+build/update.sh
 ```
 
 On Windows:
 
 ```text
-build\update.cmd -Sha <new-release-sha>
+build\update.cmd
 ```
 
-The updater replaces managed files and bumps the `PlutoniumBuild` package pin. It preserves `build/build.cs`, `build/Directory.Build.props`, `build/Directory.Build.targets`, and `build/build.slnx`. A failed update restores the previous files.
+With no arguments, the updater fetches from the `source` recorded in `build/plutonium.lock`, which defaults to the default branch (`main`) tip. Pass `--ref <tag-or-branch>` or `--sha <full-commit>` to select a revision; `--ref` resolves once and can move, while `--sha` is an exact pin. An explicit `--source` re-homes the lock to the fetched source. An install created by the 0.1.0 installer must bootstrap once with `build/update.sh --sha <full-commit>`; the old updater has no `--ref`. After that, no-arg updates follow the lock's source at the default branch.
+
+The updater replaces managed files, runs the fetched bootstrap before committing the update, and bumps the `PlutoniumBuild` package pin. It preserves `build/build.cs`, `build/Directory.Build.props`, `build/Directory.Build.targets`, and `build/build.slnx`. A failed update, including a failed bootstrap build, restores the previous files.
 
 ## Agent guardrails
 
@@ -167,8 +186,8 @@ The updater replaces managed files and bumps the `PlutoniumBuild` package pin. I
 
 ## Troubleshooting and where to read next
 
-- The installer refuses because `build/` exists: run `build/update.sh --sha <new-release-sha>` instead.
-- The fetch fails: check that the pinned SHA is a full 40-character commit SHA and that the source repository is reachable.
+- The installer refuses because `build/` exists: run `build/update.sh` instead.
+- The fetch fails: check that the source repository is reachable. If you passed `--ref`, check that the name exists and is unambiguous; if you passed `--sha`, check that it is a full 40-character commit SHA.
 - Restore fails: check that the `PlutoniumBuild` package version in `build/build.csproj` is available on nuget.org.
 - Workflow generation fails: check the `WorkflowConfig` name (lowercase letters, digits, and hyphens) and each entry id (ASCII letters, digits, `_`, and `-`, starting with a letter or `_`).
 
