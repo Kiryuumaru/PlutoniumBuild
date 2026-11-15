@@ -36,6 +36,7 @@ reject_update() {
     local label="$1" source="$2" target="$WORK/update-$3"
     mkdir -p "$target/build"
     cat > "$target/build/plutonium.lock" <<EOF
+format=1
 source=$source
 source_url=$source
 scaffold_commit=0000000000000000000000000000000000000000
@@ -65,6 +66,7 @@ reject_update_url() {
     local label="$1" source_url="$2" target="$WORK/update-url-$3"
     mkdir -p "$target/build"
     cat > "$target/build/plutonium.lock" <<EOF
+format=1
 source=https://example.test/repo.git
 source_url=$source_url
 scaffold_commit=0000000000000000000000000000000000000000

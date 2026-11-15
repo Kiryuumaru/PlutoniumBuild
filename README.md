@@ -2,9 +2,9 @@
 
 Build automation for any repository. Describe test, build, and publish steps in C#, run them from your terminal, and generate GitHub Actions and Azure Pipelines files from the same definitions — with per-app versioning handled for you.
 
-> Status: **0.1.0 distribution landed.** The engine, author layer, CLI, the single `PlutoniumBuild` package, and the scaffold installer/updater are built. `samples/` remains **planned**.
+> Status: **0.1.0 published on nuget.org.** The engine, author layer, CLI, the single `PlutoniumBuild` package, and the scaffold installer/updater are built. `samples/` remains **planned**.
 >
-> **Release gate:** the repository is currently private and the 0.1.0 distribution is not published. The one-line installer only works after the repository is public and a release commit is published. `dotnet add package PlutoniumBuild` only works after the 0.1.0 package is published to nuget.org through the manual publish workflow; publishing does not require the repository to be public. A private-repository Trusted Publishing policy may start with a 7-day temporary activation and becomes permanent after the first successful publish. The commands below pin that full 40-character commit SHA.
+> **Install source:** the repository is public. Installs and updates follow the default branch (`main`) unless you pass `--ref <tag-or-branch>` or `--sha <full-commit>`. Each command resolves the revision to a full commit SHA before fetching and records it as `scaffold_commit` in `build/plutonium.lock`; that commit is traceability, not authentication. Branch-latest is trust-on-first-use — a compromised `main` runs code. The same-payload lock hashes detect corruption or mismatch, not upstream compromise. `--ref` resolves a name once at install time; use `--sha` for an exact immutable pin.
 
 **AI agents:** start with [INIT.md](INIT.md) for the install, run, CI, and update steps.
 
@@ -17,16 +17,31 @@ Build automation for any repository. Describe test, build, and publish steps in 
 
 ## Scaffold a repository
 
-Run the installer from the repository you want to build. This one line downloads the installer from the release commit and runs it:
+Run the installer from the repository you want to build. This command downloads the installer from the default branch, then runs it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.sh | bash -s -- --sha 6aec14937739661d9c24affffaa6c8928c1f2655
+curl -fsSL -o init.sh https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/main/init.sh && bash init.sh
 ```
+
+The download and the run are joined with `&&`, so a failed download stops before anything executes.
+
+### Pin a revision
+
+`--ref` accepts a bare branch or tag name, a fully qualified `refs/heads/...` or `refs/tags/...`, or a full 40-hex commit SHA. `--sha` accepts only a full commit SHA. They are mutually exclusive:
+
+```bash
+bash init.sh --ref <tag-or-branch>
+bash init.sh --ref v1.0
+bash init.sh --ref refs/tags/v1.0
+bash init.sh --sha <full-commit>
+```
+
+A bare name such as `v1.0` or `release/1.0` resolves a tag or branch. A bare name that matches both a branch and a tag is rejected as ambiguous; pass the fully qualified form. `--ref` resolves the name to a commit once at install time, so a branch or tag can move later. Use `--sha <full-commit>` for an exact immutable pin. A tag install does not stay on the tag: later no-arg updates follow the lock's source at `main`.
 
 Prefer to inspect the script before running it? Download it to `init.sh.dl` first:
 
 ```bash
-rm -f init.sh.dl && curl -fsSL -o init.sh.dl https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.sh
+rm -f init.sh.dl && curl -fsSL -o init.sh.dl https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/main/init.sh
 ```
 
 Download to a fresh file. Do not run a leftover `init.sh.dl` from an earlier attempt.
@@ -34,26 +49,30 @@ Download to a fresh file. Do not run a leftover `init.sh.dl` from an earlier att
 Inspect `init.sh.dl`, then run it:
 
 ```bash
-mv init.sh.dl init.sh && bash init.sh --sha 6aec14937739661d9c24affffaa6c8928c1f2655
+mv init.sh.dl init.sh && bash init.sh
 ```
 
 On Windows PowerShell:
 
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.ps1 -OutFile init.ps1 -ErrorAction Stop
-powershell -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -Sha 6aec14937739661d9c24affffaa6c8928c1f2655
+Invoke-WebRequest https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/main/init.ps1 -OutFile init.ps1 -ErrorAction Stop
+powershell -NoProfile -ExecutionPolicy Bypass -File .\init.ps1
 ```
 
 Download to a fresh file. Do not run an `init.ps1` left over from an earlier attempt.
 
+To pin a revision on Windows, add `-Ref <tag-or-branch>` or `-Sha <full-commit>`.
+
 Before you run it:
 
-- The source repository must be public and the release commit `6aec14937739661d9c24affffaa6c8928c1f2655` must be published. Both are release-gated.
+- The source repository is public and reachable. The installer resolves the default branch (`main`) unless you pass `--ref` or `--sha`.
 - `git` must be on `PATH`.
 - Run the installer from the target repository root.
 - The target must not already have a `build/` directory or a root `build.sh`, `build.ps1`, or `build.cmd`. Move existing files aside first.
 
-The installer fetches exactly the pinned commit. Before writing, it rejects a credential-bearing `--source` (`-Source`) URL, requires every scaffold payload file except the lock itself to be listed as managed or preserve in the fetched lock, and checks that the lock package version, `src/Directory.Build.props`, and the build app's package pin agree. It refuses symlinked or non-regular payload files, and on Windows it also refuses a reparse-point `build/` or root wrapper destination. It installs atomically and never edits your solution or adds projects to it.
+The installer resolves the requested revision to a full commit SHA before fetching. Before writing, it rejects a credential-bearing `--source` (`-Source`) URL, requires every scaffold payload file except the lock itself to be listed as managed or preserve in the fetched lock, rejects a lock with non-canonical or duplicate reserved keys, and checks that the lock package version, `src/Directory.Build.props`, and the build app's package pin agree. It refuses symlinked or non-regular payload files, and on Windows it also refuses a reparse-point `build/` or root wrapper destination. It installs atomically and never edits your solution or adds projects to it. The resolved commit is recorded in `build/plutonium.lock`.
+
+The lock's `source` is security-sensitive: a no-arg update fetches from that source. An explicit `--source` re-homes the lock to the fetched source. The resolved `scaffold_commit` is traceability, not authentication.
 
 ## What the scaffold installs
 
@@ -66,7 +85,7 @@ build/
 ├── build.csproj           # managed: PackageReference PlutoniumBuild 0.1.0
 ├── Program.cs             # managed: entry point and options
 ├── global.json            # managed: SDK 10.0.402
-├── plutonium.lock         # managed: source commit, package version, file hashes
+├── plutonium.lock         # managed: source identity, resolved commit, package version, file hashes
 ├── build.sh/.ps1/.cmd     # managed: launchers
 ├── update.sh/.ps1/.cmd    # managed: updater
 ├── bootstrap.sh/.ps1      # managed: verified SDK bootstrap
@@ -97,12 +116,14 @@ The launcher reads `build/global.json` (SDK `10.0.402`) and installs that SDK un
 ## Update the scaffold
 
 ```bash
-build/update.sh --sha 6aec14937739661d9c24affffaa6c8928c1f2655
+build/update.sh
 ```
 
-On Windows, use `build\update.cmd -Sha 6aec14937739661d9c24affffaa6c8928c1f2655`.
+On Windows, use `build\update.cmd`.
 
-The updater fetches and verifies the pinned commit and applies the same source checks as the installer. It replaces managed files and bumps the `PlutoniumBuild` package pin. It preserves `build/build.cs`, `build/Directory.Build.props`, `build/Directory.Build.targets`, and `build/build.slnx`, and never touches your root solution. It journals every affected path under `build/temp/update/<stamp>`; if apply or the smoke build fails, it restores replaced files and removes files introduced by the new lock.
+With no arguments, the updater fetches from the `source` recorded in `build/plutonium.lock`, which defaults to the default branch (`main`) tip. Pass `--ref <tag-or-branch>` or `--sha <full-commit>` to select a revision; `--ref` resolves once and can move, while `--sha` is an exact pin. An explicit `--source` re-homes the lock to the fetched source. The updater applies the same source checks as the installer, replaces managed files, runs the fetched bootstrap before committing the update, and bumps the `PlutoniumBuild` package pin. It preserves `build/build.cs`, `build/Directory.Build.props`, `build/Directory.Build.targets`, and `build/build.slnx`, and never touches your root solution. It journals every affected path under `build/temp/update/<stamp>`; if the bootstrap build or the smoke build fails, it restores replaced files and removes files introduced by the new lock.
+
+If your installed updater predates this behavior, run it once with `build/update.sh --sha <full-commit>`; the old updater has no `--ref`. After that, no-arg updates follow the lock's source at the default branch.
 
 ## Add the package to an existing build app
 
@@ -230,9 +251,9 @@ Two version lines stay separate:
 ## Repository development
 
 - `./build.sh` (or `./build.cmd` on Windows) is the maintainer runner: it installs the pinned SDK into `.plutonium/temp` when needed, then builds `PlutoniumBuild.sln` and runs every test.
-- CI verifies the scaffold lock, the four bash scaffold smokes, and PowerShell parse in `Pre Setup`; `Scaffold smoke` runs the PowerShell smoke on Ubuntu with `-SkipBuild` and the full flow on Windows; `Build and test` runs `./build.sh` or `.\build.cmd` on both hosts. `Post Setup` fails the run unless all three jobs succeed.
+- CI verifies the scaffold lock, the five bash scaffold smokes, and PowerShell parse in `Pre Setup`; `Scaffold smoke` runs the PowerShell smoke on Ubuntu with `-SkipBuild` and the full flow on Windows; `Build and test` runs `./build.sh` or `.\build.cmd` on both hosts. `Post Setup` fails the run unless all three jobs succeed.
 - `dotnet pack src/PlutoniumBuild.Package/PlutoniumBuild.Package.csproj -c Release -o artifacts` builds the single NuGet package.
-- `.github/workflows/publish.yml` publishes to nuget.org with NuGet Trusted Publishing: the OIDC token is single-use and the minted API key is short-lived (about one hour), obtained through the pinned `NuGet/login` action, so no NuGet secret is stored. It is manual: dispatch it with `confirm` set to true from `main`; it re-verifies the scaffold lock, runs build and tests, refuses a version that already exists, then pushes. It is release-gated. See [ADR 0002](docs/adr/0002-nuget-trusted-publishing.md).
+- `.github/workflows/publish.yml` publishes to nuget.org with NuGet Trusted Publishing: the OIDC token is single-use and the minted API key is short-lived (about one hour), obtained through the pinned `NuGet/login` action, so no NuGet secret is stored. Dispatch it with `confirm` set to true from `main`; it re-verifies the scaffold lock, runs build and tests, refuses a version that already exists, then pushes. It is manual and confirm-gated. See [ADR 0002](docs/adr/0002-nuget-trusted-publishing.md).
 
 ## Links
 

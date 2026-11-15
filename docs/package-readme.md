@@ -19,19 +19,38 @@ The scaffold installs a small `build/` app, the root launchers, and the update
 tooling. Run this from the repository you want to build:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.sh | bash -s -- --sha 6aec14937739661d9c24affffaa6c8928c1f2655
+curl -fsSL -o init.sh https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/main/init.sh && bash init.sh
 ```
 
-The source repository must be public and the pinned commit must exist. The
-installer also needs `git` on `PATH` and refuses to overwrite an existing
-`build/` or conflicting root `build.sh` / `build.ps1` / `build.cmd`. If you
-override the default with `--source` (`-Source`), use a credential-free URL: the
-installer rejects userinfo, query strings, and fragments.
+The download and the run are joined with `&&`, so a failed download stops before
+anything executes. The source repository must be public and the default branch
+must be reachable. The installer also needs `git` on `PATH` and refuses to
+overwrite an existing `build/` or conflicting root `build.sh` / `build.ps1` /
+`build.cmd`. If you override the default with `--source` (`-Source`), use a
+credential-free URL: the installer rejects userinfo, query strings, and
+fragments.
+
+To pin a revision, pass `--ref <tag-or-branch>` or `--sha <full-commit>`.
+They are mutually exclusive. `--ref` accepts a bare branch or tag name, a
+fully qualified `refs/heads/...` or `refs/tags/...`, or a full 40-hex commit
+SHA. A bare name such as `v1.0` or `release/1.0` resolves a tag or branch; a
+bare name that matches both a branch and a tag is rejected as ambiguous, so
+pass the fully qualified form. `--ref` resolves the name once at install time,
+so a branch or tag can move later. Use `--sha` for an exact immutable pin.
+
+The installer records the resolved commit as `scaffold_commit` in
+`build/plutonium.lock`; branch-latest is trust-on-first-use, so a compromised
+default branch runs code. The lock's `source` is security-sensitive: a no-arg
+update fetches from it, and an explicit `--source` re-homes the lock to the
+fetched source. The same-payload lock hashes detect corruption or mismatch, not
+upstream compromise. The resolved commit is traceability, not authentication.
+The lock must use canonical reserved keys with no duplicates; a non-canonical
+or duplicate-key lock is rejected.
 
 To inspect the script first, download it to `init.sh.dl`:
 
 ```bash
-rm -f init.sh.dl && curl -fsSL -o init.sh.dl https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.sh
+rm -f init.sh.dl && curl -fsSL -o init.sh.dl https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/main/init.sh
 ```
 
 Download to a fresh file. Do not run a leftover `init.sh.dl` from an earlier
@@ -40,25 +59,29 @@ attempt.
 Inspect `init.sh.dl`, then run it:
 
 ```bash
-mv init.sh.dl init.sh && bash init.sh --sha 6aec14937739661d9c24affffaa6c8928c1f2655
+mv init.sh.dl init.sh && bash init.sh
 ```
 
 On Windows PowerShell:
 
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/6aec14937739661d9c24affffaa6c8928c1f2655/init.ps1 -OutFile init.ps1 -ErrorAction Stop
-powershell -NoProfile -ExecutionPolicy Bypass -File .\init.ps1 -Sha 6aec14937739661d9c24affffaa6c8928c1f2655
+Invoke-WebRequest https://raw.githubusercontent.com/Kiryuumaru/PlutoniumBuild/main/init.ps1 -OutFile init.ps1 -ErrorAction Stop
+powershell -NoProfile -ExecutionPolicy Bypass -File .\init.ps1
 ```
 
 Download to a fresh file. Do not run an `init.ps1` left over from an earlier
 attempt.
 
-The installer verifies the pinned commit, requires every scaffold payload file
-except the lock itself to be listed in the lock, checks that the lock package
-version, the source project version, and the build app's package pin agree, and
-rejects symlinked or non-regular payload files. On Windows, it also refuses a
-reparse-point `build/` or root wrapper destination. It never edits your
-solution or adds projects to it.
+To pin a revision on Windows, add `-Ref <tag-or-branch>` or
+`-Sha <full-commit>`.
+
+The installer resolves the requested revision to a full commit SHA before
+fetching, requires every scaffold payload file except the lock itself to be
+listed in the lock, checks that the lock package version, the source project
+version, and the build app's package pin agree, and rejects symlinked or
+non-regular payload files. On Windows, it also refuses a reparse-point `build/`
+or root wrapper destination. It never edits your solution or adds projects to
+it.
 
 ## What the scaffold installs
 
@@ -71,7 +94,7 @@ build/
 ├── build.csproj           # managed: PackageReference PlutoniumBuild 0.1.0
 ├── Program.cs             # managed: entry point and options
 ├── global.json            # managed: SDK 10.0.402
-├── plutonium.lock         # managed: source commit, package version, file hashes
+├── plutonium.lock         # managed: source identity, resolved commit, package version, file hashes
 ├── build.sh/.ps1/.cmd     # managed: launchers
 ├── update.sh/.ps1/.cmd    # managed: updater
 ├── bootstrap.sh/.ps1      # managed: verified SDK bootstrap
@@ -99,15 +122,20 @@ installs the SDK pinned in `build/global.json` under `build/temp` when no usable
 ## Update
 
 ```bash
-build/update.sh --sha 6aec14937739661d9c24affffaa6c8928c1f2655
+build/update.sh
 ```
 
-On Windows, use `build\update.cmd -Sha 6aec14937739661d9c24affffaa6c8928c1f2655`. The updater applies the
-same source checks as the installer, replaces managed files, and bumps the
+On Windows, use `build\update.cmd`. With no arguments, the updater fetches from
+the `source` recorded in `build/plutonium.lock`, which defaults to the default
+branch (`main`) tip. Pass `--ref <tag-or-branch>` or `--sha <full-commit>` to
+select a revision; `--ref` resolves once and can move, while `--sha` is an
+exact pin. An explicit `--source` re-homes the lock to the fetched source. The
+updater applies the same source checks as the installer, replaces managed
+files, runs the fetched bootstrap before committing the update, and bumps the
 `PlutoniumBuild` package pin. It preserves `build/build.cs`,
 `build/Directory.Build.props`, `build/Directory.Build.targets`, and
-`build/build.slnx`. If apply or the smoke build fails, it restores replaced
-files and removes files introduced by the new lock.
+`build/build.slnx`. If the bootstrap build or the smoke build fails, it restores
+replaced files and removes files introduced by the new lock.
 
 ## Wire it yourself
 

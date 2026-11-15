@@ -39,15 +39,18 @@ public sealed class ScaffoldSource
     /// An optional SDK version written into <c>build/global.json</c> and the lock,
     /// used to run the scaffold against the SDK installed on this machine.
     /// </param>
+    /// <param name="defaultBranch">The branch the source <c>HEAD</c> points at.</param>
     /// <returns>The committed source.</returns>
     /// <exception cref="InvalidOperationException">The scaffold payload is absent.</exception>
     public static Task<ScaffoldSource> CreateAsync(
         TempWorkspace workspace,
         RepositoryLayout layout,
-        string? sdkVersionOverride = null)
+        string? sdkVersionOverride = null,
+        string defaultBranch = "main")
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentNullException.ThrowIfNull(layout);
+        ArgumentException.ThrowIfNullOrWhiteSpace(defaultBranch);
 
         if (!Directory.Exists(layout.ScaffoldBuildDirectory))
         {
@@ -62,7 +65,7 @@ public sealed class ScaffoldSource
                 "Scaffold root payload not found at '" + layout.ScaffoldRootDirectory + "'.");
         }
 
-        var repository = GitRepository.Create(workspace, "scaffold-source");
+        var repository = GitRepository.Create(workspace, "scaffold-source", defaultBranch);
         repository.CopyDirectory(layout.ScaffoldBuildDirectory, "scaffold/build");
         repository.CopyDirectory(layout.ScaffoldRootDirectory, "scaffold/root");
 
@@ -121,6 +124,28 @@ public sealed class ScaffoldSource
         HeadSha = Repository.Commit("scaffold change: " + relativePath);
         return HeadSha;
     }
+
+    /// <summary>Creates a lightweight tag at the source <c>HEAD</c>.</summary>
+    /// <param name="name">The tag name.</param>
+    /// <returns>The tagged commit SHA.</returns>
+    public string CreateLightweightTag(string name) => Repository.CreateLightweightTag(name);
+
+    /// <summary>Creates an annotated tag at the source <c>HEAD</c>.</summary>
+    /// <param name="name">The tag name.</param>
+    /// <param name="message">The tag message.</param>
+    /// <returns>The tagged commit SHA.</returns>
+    public string CreateAnnotatedTag(string name, string message) =>
+        Repository.CreateAnnotatedTag(name, message);
+
+    /// <summary>Resolves the object a source ref points at without peeling annotated tags.</summary>
+    /// <param name="refName">The ref to resolve.</param>
+    /// <returns>The object SHA.</returns>
+    public string ResolveObject(string refName) => Repository.ResolveObject(refName);
+
+    /// <summary>Resolves the commit a source ref ultimately points at.</summary>
+    /// <param name="refName">The ref to resolve.</param>
+    /// <returns>The commit SHA.</returns>
+    public string ResolveCommit(string refName) => Repository.ResolveCommit(refName);
 
     /// <summary>Reads a file from the source repository.</summary>
     /// <param name="relativePath">A path relative to the source repository root.</param>

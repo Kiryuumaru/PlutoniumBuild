@@ -16,7 +16,7 @@ lock_get() {
         /^[[:space:]]*#/ { next }
         {
             line = $0
-            sub(/^[[:space:]]+/, "", line)
+            sub(/\r$/, "", line)
             prefix = key "="
             if (index(line, prefix) == 1) {
                 value = substr(line, length(prefix) + 1)
@@ -26,6 +26,75 @@ lock_get() {
             }
         }
     ' "$LOCK_FILE"
+}
+
+is_reserved_lock_key() {
+    case "$1" in
+        format|source|source_url|scaffold_commit|package_version|sdk_version|\
+        installer_repo|installer_commit|installer_sh_sha256|installer_ps1_sha256|\
+        sdk_archives_sha256)
+            return 0
+            ;;
+        sdk_archive_*_sha512)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+validate_lock() {
+    local file="$1" prefix="$2"
+    local line trimmed key value seen=" "
+    while IFS= read -r line; do
+        line=${line%$'\r'}
+        case "$line" in
+            ''|'#'*) continue ;;
+        esac
+        trimmed=${line#"${line%%[![:space:]]*}"}
+        case "$trimmed" in
+            '#'*) continue ;;
+        esac
+        if [[ "$trimmed" =~ ^([A-Za-z0-9_-]+)= ]]; then
+            key=${BASH_REMATCH[1]}
+            if ! is_reserved_lock_key "$key"; then
+                continue
+            fi
+            if [ "$trimmed" != "$line" ]; then
+                echo "$prefix is invalid: reserved key $key must start at column 0." >&2
+                return 1
+            fi
+            case "$seen" in
+                *" $key "*)
+                    echo "$prefix is invalid: duplicate reserved key $key." >&2
+                    return 1
+                    ;;
+            esac
+            seen="$seen$key "
+            value=${trimmed#*=}
+            if [ "$key" = "scaffold_commit" ] && ! [[ "$value" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                echo "$prefix is invalid: scaffold_commit must be a full 40-character commit SHA." >&2
+                return 1
+            fi
+            continue
+        fi
+        if [[ "$trimmed" =~ ^([A-Za-z0-9_-]+)[[:space:]]+= ]]; then
+            key=${BASH_REMATCH[1]}
+            if is_reserved_lock_key "$key"; then
+                echo "$prefix is invalid: reserved key $key has a non-canonical form; write $key=value at column 0." >&2
+                return 1
+            fi
+        fi
+    done < "$file"
+    for key in format source source_url scaffold_commit package_version; do
+        case "$seen" in
+            *" $key "*) ;;
+            *)
+                echo "$prefix is invalid: missing required key $key." >&2
+                return 1
+                ;;
+        esac
+    done
+    return 0
 }
 
 sha256_file() {
@@ -245,6 +314,11 @@ require_tools() {
 write_lock() {
     local temporary="$LOCK_FILE.new"
     local line installed expected actual source
+    [ -f "$LOCK_FILE" ] || {
+        echo "scaffold/lock.sh: missing $LOCK_FILE" >&2
+        exit 1
+    }
+    validate_lock "$LOCK_FILE" "scaffold/lock.sh: lock" || exit 1
     if ! check_completeness "$LOCK_FILE"; then
         echo "scaffold/lock.sh: add managed or preserve entries for every scaffold file before writing." >&2
         exit 1
@@ -319,6 +393,7 @@ verify_lock() {
         echo "scaffold/lock.sh: missing $LOCK_FILE" >&2
         exit 1
     }
+    validate_lock "$LOCK_FILE" "scaffold/lock.sh: lock" || exit 1
 
     local failures=0 line installed expected actual source
 

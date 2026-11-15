@@ -12,7 +12,7 @@ This folder is the PlutoniumBuild build app for this repository. It turns the C#
 | `Program.cs` | Managed | Entry point; builds the options and runs the shell |
 | `build.csproj` | Managed | `net10.0` build app; pins the `PlutoniumBuild` package |
 | `global.json` | Managed | SDK `10.0.402` with `latestPatch` |
-| `plutonium.lock` | Managed | Source commit, package version, SDK pins, file hashes |
+| `plutonium.lock` | Managed | Source identity, resolved commit, package version, SDK pins, file hashes |
 | `build.sh` | Managed | Linux and macOS launcher |
 | `build.ps1` | Managed | Windows PowerShell launcher |
 | `build.cmd` | Managed | Windows CMD wrapper for `build.ps1` |
@@ -150,16 +150,18 @@ On GitHub, `EntryIds` limits the secret to the named entry jobs; `publish` match
 From the repository root:
 
 ```bash
-build/update.sh --sha <new-release-sha>
+build/update.sh
 ```
 
 On Windows:
 
 ```text
-build\update.cmd -Sha <new-release-sha>
+build\update.cmd
 ```
 
-The updater replaces managed files and bumps the `PlutoniumBuild` package pin. It preserves `build.cs`, `Directory.Build.props`, `Directory.Build.targets`, and `build.slnx`. A failed update restores the previous files and removes files added by the new version.
+With no arguments, the updater fetches from the `source` recorded in `plutonium.lock` (security-sensitive), which defaults to the default branch (`main`) tip. Pass `--ref <tag-or-branch>` or `--sha <full-commit>` to select a revision. `--ref` accepts a bare branch or tag name, a fully qualified `refs/heads/...` or `refs/tags/...`, or a full 40-hex commit; a bare name that matches both a branch and a tag is rejected as ambiguous. `--ref` resolves once and can move; `--sha` is an exact pin. An explicit `--source` re-homes the lock to the fetched source. A non-canonical or duplicate-key lock is rejected. A tag install does not stay on the tag: later no-arg updates follow the lock's source at `main`.
+
+The updater replaces managed files, runs the fetched bootstrap before committing the update, and bumps the `PlutoniumBuild` package pin. It preserves `build.cs`, `Directory.Build.props`, `Directory.Build.targets`, and `build.slnx`. A failed update, including a failed bootstrap build, restores the previous files and removes files added by the new version.
 
 ## Agent instructions
 

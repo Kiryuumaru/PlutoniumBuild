@@ -157,6 +157,18 @@ function Get-InstalledPath {
     return Join-Path $Consumer $Relative
 }
 
+function Get-LockValue {
+    param([string]$Consumer, [string]$Key)
+    $lockPath = Join-Path $Consumer "build/plutonium.lock"
+    $prefix = $Key + "="
+    foreach ($line in [System.IO.File]::ReadAllLines($lockPath)) {
+        if ($line.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+            return $line.Substring($prefix.Length).Trim()
+        }
+    }
+    return $null
+}
+
 function Assert-ManagedHashes {
     param([string]$Consumer, [string]$Label)
     $lockPath = Join-Path $Consumer "build/plutonium.lock"
@@ -369,7 +381,7 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $source "src") -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $RepositoryRoot "src/Directory.Build.props") -Destination (Join-Path $source "src/Directory.Build.props") -Force
 
-    & git -C $source init -q
+    & git -C $source init -q -b main
     if ($LASTEXITCODE -ne 0) { throw "powershell-smoke: git init failed for source." }
     & git -C $source config user.email smoke@example.test
     & git -C $source config user.name Smoke
@@ -445,7 +457,7 @@ try {
     }
 
     New-Item -ItemType Directory -Path $consumer -Force | Out-Null
-    & git -C $consumer init -q
+    & git -C $consumer init -q -b main
     & git -C $consumer config user.email smoke@example.test
     & git -C $consumer config user.name Smoke
     $install = Invoke-SmokeScript -ScriptPath (Join-Path $RepositoryRoot "init.ps1") `
@@ -454,6 +466,17 @@ try {
     if ($install.ExitCode -ne 0) { throw "powershell-smoke: init failed." }
     $lockText = Get-Content -LiteralPath (Join-Path $consumer "build/plutonium.lock") -Raw
     if ($lockText -match "secret-token") { Fail-Smoke "installed lock contains a credential." }
+
+    $consumerLockBeforeUsage = (Get-FileHash -LiteralPath (Join-Path $consumer "build/plutonium.lock") -Algorithm SHA256).Hash
+    $shortShaUpdate = Invoke-SmokeScript -ScriptPath (Join-Path $consumer "build/update.ps1") `
+        -Arguments @("-Sha", "abc1234", "-Target", $consumer, "-NoSmoke") `
+        -WorkingDirectory $consumer -Label "update with a short sha" -ExpectFailure
+    if ($shortShaUpdate.ExitCode -ne 2) {
+        Fail-Smoke "update with a short sha exited $($shortShaUpdate.ExitCode), expected 2."
+    }
+    if ((Get-FileHash -LiteralPath (Join-Path $consumer "build/plutonium.lock") -Algorithm SHA256).Hash -ne $consumerLockBeforeUsage) {
+        Fail-Smoke "update changed the lock for a usage error."
+    }
 
     # The build app resolves HEAD for its run identity, so the consumer must be
     # a committed repository before the build step runs.
@@ -507,6 +530,195 @@ try {
         Fail-Smoke "update was not idempotent at the same commit."
     }
 
+    # The default ref resolves to main: init and update work without -Sha, and
+    # a repeated update at the moved tip is a no-op.
+    $defaultConsumer = Join-Path $temporary "default-consumer"
+    New-Item -ItemType Directory -Path $defaultConsumer -Force | Out-Null
+    & git -C $defaultConsumer init -q -b main
+    & git -C $defaultConsumer config user.email smoke@example.test
+    & git -C $defaultConsumer config user.name Smoke
+    $defaultInstall = Invoke-SmokeScript -ScriptPath (Join-Path $RepositoryRoot "init.ps1") `
+        -Arguments @("-Source", $source, "-Target", $defaultConsumer) `
+        -WorkingDirectory $RepositoryRoot -Label "default-ref init"
+    if ($defaultInstall.ExitCode -ne 0) { throw "powershell-smoke: default-ref init failed." }
+    if ((Get-LockValue -Consumer $defaultConsumer -Key "scaffold_commit") -ne $sha2) {
+        Fail-Smoke "default-ref init did not record the main tip."
+    }
+    if ($defaultInstall.Output -notmatch "ref refs/heads/main \(default\)") {
+        Fail-Smoke "default-ref init did not report the default main ref."
+    }
+
+    Add-LfLine -Path (Join-Path $source "scaffold/build/build.sh") -Value "# default-ref marker"
+    Set-SourceManagedHash -SourceRoot $source -Relative "build/build.sh"
+    & git -C $source add -A
+    & git -C $source commit -qm default-ref
+    if ($LASTEXITCODE -ne 0) { throw "powershell-smoke: default-ref commit failed." }
+    $defaultSha = (& git -C $source rev-parse HEAD).Trim()
+
+    $defaultUpdate = Invoke-SmokeScript -ScriptPath (Join-Path $defaultConsumer "build/update.ps1") `
+        -Arguments @("-Source", $source, "-Target", $defaultConsumer, "-NoSmoke") `
+        -WorkingDirectory $defaultConsumer -Label "default-ref update"
+    if ($defaultUpdate.ExitCode -ne 0) { throw "powershell-smoke: default-ref update failed." }
+    if ((Get-LockValue -Consumer $defaultConsumer -Key "scaffold_commit") -ne $defaultSha) {
+        Fail-Smoke "default-ref update did not record the moved main tip."
+    }
+    if (-not (Select-String -LiteralPath (Join-Path $defaultConsumer "build/build.sh") -Pattern "# default-ref marker" -Quiet)) {
+        Fail-Smoke "default-ref update did not install the managed build.sh change."
+    }
+
+    $defaultAgain = Invoke-SmokeScript -ScriptPath (Join-Path $defaultConsumer "build/update.ps1") `
+        -Arguments @("-Source", $source, "-Target", $defaultConsumer, "-NoSmoke") `
+        -WorkingDirectory $defaultConsumer -Label "default-ref idempotent update"
+    if ($defaultAgain.ExitCode -ne 0 -or $defaultAgain.Output -notmatch "already at") {
+        Fail-Smoke "default-ref update was not idempotent at the moved main tip."
+    }
+
+    # The default ref is always refs/heads/main, not the source repository's
+    # default branch. A trunk-only source needs an explicit branch name.
+    $trunkSource = Join-Path $temporary "trunk-source"
+    & git clone -q --single-branch --branch main $source $trunkSource
+    if ($LASTEXITCODE -ne 0) { throw "powershell-smoke: could not clone the trunk source." }
+    & git -C $trunkSource config user.email smoke@example.test
+    & git -C $trunkSource config user.name Smoke
+    & git -C $trunkSource branch -m main trunk
+    if ($LASTEXITCODE -ne 0) { throw "powershell-smoke: could not rename the trunk source branch." }
+    $trunkSha = (& git -C $trunkSource rev-parse HEAD).Trim()
+
+    $trunkDefaultTarget = Join-Path $temporary "trunk-default-target"
+    New-Item -ItemType Directory -Path $trunkDefaultTarget -Force | Out-Null
+    $trunkDefault = Invoke-SmokeScript -ScriptPath (Join-Path $RepositoryRoot "init.ps1") `
+        -Arguments @("-Source", $trunkSource, "-Target", $trunkDefaultTarget) `
+        -WorkingDirectory $RepositoryRoot -Label "default-ref init against a trunk source" -ExpectFailure
+    if ($trunkDefault.ExitCode -ne 1) {
+        Fail-Smoke "default-ref init against a trunk source exited $($trunkDefault.ExitCode), expected 1."
+    }
+    if (Test-Path -LiteralPath (Join-Path $trunkDefaultTarget "build")) {
+        Fail-Smoke "default-ref init installed a scaffold against a trunk source."
+    }
+
+    $trunkTarget = Join-Path $temporary "trunk-target"
+    New-Item -ItemType Directory -Path $trunkTarget -Force | Out-Null
+    $trunkInstall = Invoke-SmokeScript -ScriptPath (Join-Path $RepositoryRoot "init.ps1") `
+        -Arguments @("-Source", $trunkSource, "-Ref", "trunk", "-Target", $trunkTarget) `
+        -WorkingDirectory $RepositoryRoot -Label "bare trunk ref init"
+    if ($trunkInstall.ExitCode -ne 0) { throw "powershell-smoke: bare trunk ref init failed." }
+    if ((Get-LockValue -Consumer $trunkTarget -Key "scaffold_commit") -ne $trunkSha) {
+        Fail-Smoke "bare trunk ref init did not record the trunk tip."
+    }
+
+    # Lightweight and annotated tags resolve to the tagged commit; the annotated
+    # tag object itself must be peeled.
+    & git -C $source tag v-light
+    if ($LASTEXITCODE -ne 0) { throw "powershell-smoke: lightweight tag failed." }
+    $lightCommit = (& git -C $source rev-parse "refs/tags/v-light^{commit}").Trim()
+    $lightConsumer = Join-Path $temporary "light-consumer"
+    New-Item -ItemType Directory -Path $lightConsumer -Force | Out-Null
+    & git -C $lightConsumer init -q -b main
+    & git -C $lightConsumer config user.email smoke@example.test
+    & git -C $lightConsumer config user.name Smoke
+    $lightInstall = Invoke-SmokeScript -ScriptPath (Join-Path $RepositoryRoot "init.ps1") `
+        -Arguments @("-Source", $source, "-Ref", "refs/tags/v-light", "-Target", $lightConsumer) `
+        -WorkingDirectory $RepositoryRoot -Label "lightweight tag init"
+    if ($lightInstall.ExitCode -ne 0) { throw "powershell-smoke: lightweight tag init failed." }
+    if ((Get-LockValue -Consumer $lightConsumer -Key "scaffold_commit") -ne $lightCommit) {
+        Fail-Smoke "lightweight tag init did not record the tagged commit."
+    }
+
+    $bareLightConsumer = Join-Path $temporary "bare-light-consumer"
+    New-Item -ItemType Directory -Path $bareLightConsumer -Force | Out-Null
+    & git -C $bareLightConsumer init -q -b main
+    & git -C $bareLightConsumer config user.email smoke@example.test
+    & git -C $bareLightConsumer config user.name Smoke
+    $bareLightInstall = Invoke-SmokeScript -ScriptPath (Join-Path $RepositoryRoot "init.ps1") `
+        -Arguments @("-Source", $source, "-Ref", "v-light", "-Target", $bareLightConsumer) `
+        -WorkingDirectory $RepositoryRoot -Label "bare lightweight tag init"
+    if ($bareLightInstall.ExitCode -ne 0) { throw "powershell-smoke: bare lightweight tag init failed." }
+    if ((Get-LockValue -Consumer $bareLightConsumer -Key "scaffold_commit") -ne $lightCommit) {
+        Fail-Smoke "bare lightweight tag init did not record the tagged commit."
+    }
+
+    & git -C $source -c tag.gpgsign=false tag -a v-annotated -m "annotated ref"
+    if ($LASTEXITCODE -ne 0) { throw "powershell-smoke: annotated tag failed." }
+    $annotatedObject = (& git -C $source rev-parse "refs/tags/v-annotated").Trim()
+    $annotatedCommit = (& git -C $source rev-parse "refs/tags/v-annotated^{commit}").Trim()
+    if ($annotatedObject -eq $annotatedCommit) { throw "powershell-smoke: annotated tag fixture is not a tag object." }
+    $annotatedConsumer = Join-Path $temporary "annotated-consumer"
+    New-Item -ItemType Directory -Path $annotatedConsumer -Force | Out-Null
+    & git -C $annotatedConsumer init -q -b main
+    & git -C $annotatedConsumer config user.email smoke@example.test
+    & git -C $annotatedConsumer config user.name Smoke
+    $annotatedInstall = Invoke-SmokeScript -ScriptPath (Join-Path $RepositoryRoot "init.ps1") `
+        -Arguments @("-Source", $source, "-Ref", "refs/tags/v-annotated", "-Target", $annotatedConsumer) `
+        -WorkingDirectory $RepositoryRoot -Label "annotated tag init"
+    if ($annotatedInstall.ExitCode -ne 0) { throw "powershell-smoke: annotated tag init failed." }
+    $annotatedLockCommit = Get-LockValue -Consumer $annotatedConsumer -Key "scaffold_commit"
+    if ($annotatedLockCommit -ne $annotatedCommit) {
+        Fail-Smoke "annotated tag init did not record the tagged commit."
+    }
+    if ($annotatedLockCommit -eq $annotatedObject) {
+        Fail-Smoke "annotated tag init recorded the tag object."
+    }
+
+    $bareAnnotatedConsumer = Join-Path $temporary "bare-annotated-consumer"
+    New-Item -ItemType Directory -Path $bareAnnotatedConsumer -Force | Out-Null
+    & git -C $bareAnnotatedConsumer init -q -b main
+    & git -C $bareAnnotatedConsumer config user.email smoke@example.test
+    & git -C $bareAnnotatedConsumer config user.name Smoke
+    $bareAnnotatedInstall = Invoke-SmokeScript -ScriptPath (Join-Path $RepositoryRoot "init.ps1") `
+        -Arguments @("-Source", $source, "-Ref", "v-annotated", "-Target", $bareAnnotatedConsumer) `
+        -WorkingDirectory $RepositoryRoot -Label "bare annotated tag init"
+    if ($bareAnnotatedInstall.ExitCode -ne 0) { throw "powershell-smoke: bare annotated tag init failed." }
+    $bareAnnotatedLockCommit = Get-LockValue -Consumer $bareAnnotatedConsumer -Key "scaffold_commit"
+    if ($bareAnnotatedLockCommit -ne $annotatedCommit) {
+        Fail-Smoke "bare annotated tag init did not record the tagged commit."
+    }
+    if ($bareAnnotatedLockCommit -eq $annotatedObject) {
+        Fail-Smoke "bare annotated tag init recorded the tag object."
+    }
+
+    # A name that is both a branch and a tag is ambiguous; the caller must pass
+    # a fully qualified ref.
+    & git -C $source branch shared
+    if ($LASTEXITCODE -ne 0) { throw "powershell-smoke: ambiguous branch fixture failed." }
+    & git -C $source tag shared
+    if ($LASTEXITCODE -ne 0) { throw "powershell-smoke: ambiguous tag fixture failed." }
+    $ambiguousTarget = Join-Path $temporary "ambiguous-target"
+    New-Item -ItemType Directory -Path $ambiguousTarget -Force | Out-Null
+    $ambiguous = Invoke-SmokeScript -ScriptPath (Join-Path $RepositoryRoot "init.ps1") `
+        -Arguments @("-Source", $source, "-Ref", "shared", "-Target", $ambiguousTarget) `
+        -WorkingDirectory $RepositoryRoot -Label "ambiguous bare ref init" -ExpectFailure
+    if ($ambiguous.ExitCode -ne 2) {
+        Fail-Smoke "ambiguous bare ref init exited $($ambiguous.ExitCode), expected 2."
+    }
+    if ($ambiguous.Output -notmatch "ambiguous") {
+        Fail-Smoke "ambiguous bare ref init did not explain the ambiguity."
+    }
+    if ($ambiguous.Output -notmatch "refs/heads/shared" -or $ambiguous.Output -notmatch "refs/tags/shared") {
+        Fail-Smoke "ambiguous bare ref init did not name both refs."
+    }
+    if (Test-Path -LiteralPath (Join-Path $ambiguousTarget "build")) {
+        Fail-Smoke "ambiguous bare ref init wrote a scaffold."
+    }
+
+    # Malformed values and an option-shaped ref are usage errors: exit 2.
+    $usageTarget = Join-Path $temporary "usage-target"
+    New-Item -ItemType Directory -Path $usageTarget -Force | Out-Null
+    $shortSha = Invoke-SmokeScript -ScriptPath (Join-Path $RepositoryRoot "init.ps1") `
+        -Arguments @("-Source", $source, "-Sha", "abc1234", "-Target", $usageTarget) `
+        -WorkingDirectory $RepositoryRoot -Label "init with a short sha" -ExpectFailure
+    if ($shortSha.ExitCode -ne 2) {
+        Fail-Smoke "init with a short sha exited $($shortSha.ExitCode), expected 2."
+    }
+    $optionRef = Invoke-SmokeScript -ScriptPath (Join-Path $RepositoryRoot "init.ps1") `
+        -Arguments @("-Source", $source, "-Ref", "--upload-pack=probe", "-Target", $usageTarget) `
+        -WorkingDirectory $RepositoryRoot -Label "init with an option-shaped ref" -ExpectFailure
+    if ($optionRef.ExitCode -ne 2) {
+        Fail-Smoke "init with an option-shaped ref exited $($optionRef.ExitCode), expected 2."
+    }
+    if (Test-Path -LiteralPath (Join-Path $usageTarget "build")) {
+        Fail-Smoke "usage-error init wrote a scaffold."
+    }
+
     # A Windows checkout can hand the installer a CRLF source tree and a CRLF
     # installed lock. Both must normalize to LF before hashing or parsing.
     $crlfSource = Join-Path $temporary "crlf-source"
@@ -536,7 +748,7 @@ try {
 
     $crlfConsumer = Join-Path $temporary "crlf-consumer"
     New-Item -ItemType Directory -Path $crlfConsumer -Force | Out-Null
-    & git -C $crlfConsumer init -q
+    & git -C $crlfConsumer init -q -b main
     & git -C $crlfConsumer config user.email smoke@example.test
     & git -C $crlfConsumer config user.name Smoke
     $crlfInstall = Invoke-SmokeScript -ScriptPath (Join-Path $RepositoryRoot "init.ps1") `
@@ -548,7 +760,7 @@ try {
     Assert-LfFile -Path (Join-Path $crlfConsumer "build/build.sh") -Label "CRLF init build.sh"
     Assert-LfFile -Path (Join-Path $crlfConsumer "build/build.csproj") -Label "CRLF init build.csproj"
     Assert-LfFile -Path (Join-Path $crlfConsumer "build.sh") -Label "CRLF init root build.sh"
-    if ((Get-Content -LiteralPath $crlfLock -Raw) -notmatch "scaffold_commit=$crlfSha1") {
+    if ((Get-LockValue -Consumer $crlfConsumer -Key "scaffold_commit") -ne $crlfSha1) {
         Fail-Smoke "CRLF init lock does not record the requested commit."
     }
     Assert-PreserveEntries -Consumer $crlfConsumer -Label "CRLF init"
@@ -579,7 +791,7 @@ try {
     if (-not (Select-String -LiteralPath (Join-Path $crlfConsumer "build/build.sh") -Pattern "# crlf update marker" -Quiet)) {
         Fail-Smoke "CRLF update did not install the managed build.sh change."
     }
-    if ((Get-Content -LiteralPath $crlfLock -Raw) -notmatch "scaffold_commit=$crlfSha2") {
+    if ((Get-LockValue -Consumer $crlfConsumer -Key "scaffold_commit") -ne $crlfSha2) {
         Fail-Smoke "CRLF update lock does not record the requested commit."
     }
     Assert-PreserveEntries -Consumer $crlfConsumer -Label "CRLF update"

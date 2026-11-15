@@ -172,13 +172,25 @@ public static class ProcessHarness
     /// <param name="workingDirectory">The working directory.</param>
     /// <param name="environment">Environment overrides.</param>
     /// <param name="timeout">The maximum run time.</param>
+    /// <param name="literalArgumentIndexes">
+    /// Zero-based indexes of arguments that are grammar tokens rather than
+    /// paths, such as ref names. Those arguments reach the script unchanged on
+    /// every platform; every other argument has its separators normalized for
+    /// bash.
+    /// </param>
     /// <returns>The captured result.</returns>
+    /// <remarks>
+    /// On Windows, the child environment carries <c>MSYS=noglob</c> so the
+    /// MSYS2 runtime does not glob command-line arguments before the script
+    /// starts.
+    /// </remarks>
     public static Task<ProcessResult> RunBashAsync(
         string scriptPath,
         IReadOnlyList<string> arguments,
         string? workingDirectory = null,
         IReadOnlyDictionary<string, string?>? environment = null,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        IReadOnlyCollection<int>? literalArgumentIndexes = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scriptPath);
         var executable = ResolveBashExecutable();
@@ -186,7 +198,7 @@ public static class ProcessHarness
         {
             ToBashPath(scriptPath),
         };
-        allArguments.AddRange(arguments.Select(ToBashPath));
+        allArguments.AddRange(NormalizeBashArguments(arguments, literalArgumentIndexes));
         return RunAsync(
             new ProcessRequest(
                 executable,
@@ -197,10 +209,53 @@ public static class ProcessHarness
     }
 
     /// <summary>
+    /// Normalizes path-shaped bash arguments for the host platform while
+    /// forwarding literal arguments unchanged. A ref name is git grammar, not a
+    /// path: rewriting its backslash on Windows would turn a malformed ref into
+    /// a different, valid ref and hide the rejection under test.
+    /// </summary>
+    /// <param name="arguments">The arguments forwarded to the script.</param>
+    /// <param name="literalArgumentIndexes">Zero-based indexes to forward unchanged.</param>
+    /// <returns>The argument list to pass to bash.</returns>
+    internal static IReadOnlyList<string> NormalizeBashArguments(
+        IReadOnlyList<string> arguments,
+        IReadOnlyCollection<int>? literalArgumentIndexes)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        if (literalArgumentIndexes is null || literalArgumentIndexes.Count == 0)
+        {
+            return arguments.Select(ToBashPath).ToArray();
+        }
+
+        var literalIndexes = new HashSet<int>(literalArgumentIndexes);
+        foreach (var index in literalIndexes)
+        {
+            if (index < 0 || index >= arguments.Count)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(literalArgumentIndexes),
+                    index,
+                    "The literal argument index is outside the argument list.");
+            }
+        }
+
+        var normalized = new string[arguments.Count];
+        for (var index = 0; index < arguments.Count; index++)
+        {
+            normalized[index] = literalIndexes.Contains(index)
+                ? arguments[index]
+                : ToBashPath(arguments[index]);
+        }
+
+        return normalized;
+    }
+
+    /// <summary>
     /// Adds the Git for Windows tool directories to the child's <c>PATH</c> on
-    /// Windows. The <c>bin\bash.exe</c> compat wrapper used to prepend these
-    /// directories itself; the real <c>usr\bin\bash.exe</c> does not, so the
-    /// harness supplies them explicitly. A caller-supplied <c>PATH</c> keeps its
+    /// Windows, and disables MSYS2 command-line globbing. The
+    /// <c>bin\bash.exe</c> compat wrapper used to prepend these directories
+    /// itself; the real <c>usr\bin\bash.exe</c> does not, so the harness
+    /// supplies them explicitly. A caller-supplied <c>PATH</c> keeps its
     /// entries first so a shim directory stays ahead of them; an inherited host
     /// <c>PATH</c> gets the tool directories first so Git's POSIX tools win over
     /// the same-named Windows system tools (<c>find.exe</c>, <c>sort.exe</c>).
@@ -218,15 +273,53 @@ public static class ProcessHarness
         }
 
         var toolDirectories = BashToolDirectories(executable);
-        if (toolDirectories.Count == 0)
+        var prepared = toolDirectories.Count == 0
+            ? environment
+            : PrepareBashEnvironmentCore(
+                toolDirectories,
+                environment,
+                Environment.GetEnvironmentVariable("PATH"));
+
+        return MergeMsysNoGlob(prepared, Environment.GetEnvironmentVariable("MSYS"));
+    }
+
+    /// <summary>
+    /// Merges <c>noglob</c> into the child's <c>MSYS</c> options. The MSYS2
+    /// runtime globs command-line arguments when a native parent starts an
+    /// MSYS program; a brace in a ref such as <c>refs/heads/ma@{in</c> would be
+    /// rewritten before bash sees it. <c>noglob</c> disables that expansion.
+    /// An existing option string is preserved and extended rather than
+    /// replaced, and options are separated by spaces as the runtime expects.
+    /// </summary>
+    /// <param name="environment">The prepared environment, or null.</param>
+    /// <param name="inheritedMsys">The host <c>MSYS</c> value used when the caller supplies none.</param>
+    /// <returns>The environment with <c>MSYS=noglob</c> merged in.</returns>
+    internal static IReadOnlyDictionary<string, string?> MergeMsysNoGlob(
+        IReadOnlyDictionary<string, string?>? environment,
+        string? inheritedMsys)
+    {
+        var existing = inheritedMsys;
+        if (environment is not null)
         {
-            return environment;
+            foreach (var pair in environment)
+            {
+                if (string.Equals(pair.Key, "MSYS", StringComparison.OrdinalIgnoreCase))
+                {
+                    existing = pair.Value;
+                    break;
+                }
+            }
         }
 
-        return PrepareBashEnvironmentCore(
-            toolDirectories,
-            environment,
-            Environment.GetEnvironmentVariable("PATH"));
+        var options = string.IsNullOrWhiteSpace(existing)
+            ? "noglob"
+            : existing.TrimEnd() + " noglob";
+
+        var merged = environment is null
+            ? new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string?>(environment, StringComparer.OrdinalIgnoreCase);
+        merged["MSYS"] = options;
+        return merged;
     }
 
     /// <summary>

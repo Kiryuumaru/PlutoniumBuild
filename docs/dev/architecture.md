@@ -2,7 +2,7 @@
 
 > Developer documentation — for maintainers, not end users.
 >
-> Status: **0.1.0 distribution landed.** `src/Plutonium.Core/`,
+> Status: **0.1.0 published on nuget.org.** `src/Plutonium.Core/`,
 > `src/Plutonium.Helpers/`, `src/Plutonium.Shell/`, and
 > `src/PlutoniumBuild.Package/` exist with landed code; `scaffold/`,
 > `init.sh`, and `init.ps1` exist; `tests/` landed; `samples/` remains
@@ -82,24 +82,35 @@ but they enforce host-specific security contracts:
   references the `PlutoniumBuild` package, `Program.cs` wires
   `AddPlutoniumShell`, and `build.cs` is the user-owned sample with
   Test/Build/Publish terminal calls. `plutonium.lock` records the source
-  commit, package version, SDK version, and SHA-256 hashes for managed files.
+  identity, resolved commit, package version, SDK version, and SHA-256 hashes
+  for managed files.
 - `scaffold/root/` holds thin root wrappers `build.sh`, `build.ps1`, and
   `build.cmd`. Generated CI invokes those root names; they forward into
   `build/`.
-- `init.sh` / `init.ps1` install the payload from a full 40-character commit
-  SHA. They reject source URLs with credentials, query strings, or fragments;
-  require every payload file except the lock itself to carry a `managed` or
-  `preserve` lock entry; and require the lock's `package_version`,
+- `init.sh` / `init.ps1` install the payload from the default branch (`main`)
+  by default. They resolve the requested revision — `--ref` for a bare branch
+  or tag name, a fully qualified `refs/heads/...` or `refs/tags/...`, or a full
+  commit, and `--sha` for an exact commit — to a full commit SHA before
+  fetching. A bare name that matches both a branch and a tag is rejected as
+  ambiguous. They reject source URLs with credentials, query strings, or
+  fragments; require every payload file except the lock itself to carry a
+  `managed` or `preserve` lock entry; reject a lock with non-canonical or
+  duplicate reserved keys; and require the lock's `package_version`,
   `src/Directory.Build.props`, and `scaffold/build/build.csproj` pin to agree.
   They reject symlinked or non-regular payload files, refuse an existing
   `build/` or conflicting root wrappers, stage the install atomically, and
   never touch the consumer solution. `init.ps1` also refuses a reparse-point
   `build/` or root wrapper destination, including a dangling one.
 - `build/update.sh` / `build/update.ps1` apply the same source contract,
-  refresh managed files from a pinned commit, bump the package pin, and
-  preserve user-owned files. Each update journals every affected path under
-  `build/temp/update/<stamp>`. If apply or the smoke build fails, it restores
-  replaced files and removes files introduced by the new lock.
+  refresh managed files from the resolved commit, bump the package pin, and
+  preserve user-owned files. With no arguments they fetch from the `source`
+  recorded in the lock at the default branch tip; an explicit `--source`
+  re-homes the lock to the fetched source. `--ref` and `--sha` select a
+  revision; `--ref` resolves once and can move, while `--sha` is an exact pin.
+  Each update runs the fetched bootstrap before committing, journals every
+  affected path under `build/temp/update/<stamp>`, and restores replaced files
+  and removes files introduced by the new lock if the bootstrap or smoke build
+  fails.
 
 The repository root runners are separate: `build.sh`, `build.ps1`, and
 `build.cmd` here are maintainer runners that build `PlutoniumBuild.sln` and
@@ -117,7 +128,7 @@ thin wrappers into `build/`.
 | `build/build.csproj` | Managed | Replaced; package version bumped to the lock's `package_version` |
 | `build/Program.cs` | Managed | Replaced |
 | `build/global.json` | Managed | Replaced |
-| `build/plutonium.lock` | Managed | Replaced; consumer source kept, commit, package version, and hashes updated |
+| `build/plutonium.lock` | Managed | Replaced; recorded source kept unless `--source` re-homes it, resolved commit, package version, and hashes updated |
 | `build/build.sh/.ps1/.cmd` | Managed | Replaced |
 | `build/update.sh/.ps1/.cmd` | Managed | Replaced |
 | `build/bootstrap.sh/.ps1` | Managed | Replaced |
@@ -148,17 +159,24 @@ shared by the scaffold and the maintainer runner.
 6. Never install globally and never leave `PATH` changed outside the
    process.
 
-`init` and `update` both fetch a full commit SHA, check out exactly that
-commit, verify the payload against the lock, and reject symlinks or
-non-regular files. `update` keeps the consumer's source identity in the lock
-and refreshes the commit, manifest, package version, and file hashes.
+`init` and `update` both resolve the requested revision to a full commit SHA
+before fetching, check out exactly that commit, verify the payload against the
+lock, and reject symlinks or non-regular files. The lock records the resolved
+commit as `scaffold_commit`; it stores no requested ref. The lock's `source` is
+security-sensitive: a no-arg update fetches from it, and an explicit `--source`
+re-homes the lock to the fetched source. A non-canonical or duplicate-key lock
+is rejected. `update` keeps the recorded source identity unless `--source`
+re-homes it, refreshes the commit, manifest, package version, and file hashes,
+and executes the fetched bootstrap before committing the update.
 
 ## Verification
 
-- `bash scaffold/lock.sh verify` checks lock completeness, managed-file hashes,
-  the package-version invariant, and the SDK pin.
+- `bash scaffold/lock.sh verify` checks lock completeness, canonical and unique
+  reserved keys, managed-file hashes, the package-version invariant, and the
+  SDK pin.
 - Bash smoke scripts cover credential-bearing source URLs, unlisted payload
-  files, preserve drift, and update rollback.
+  files, preserve drift, update rollback, and ref resolution with ambiguity
+  refusal.
 - `scaffold/smoke/powershell-smoke.ps1` exercises `init.ps1`, `update.ps1`,
   and `build.ps1` in child PowerShell processes. Windows CI runs the full
   flow; Linux CI parses every PowerShell file and runs the smoke with

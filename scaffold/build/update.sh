@@ -1,23 +1,26 @@
 #!/usr/bin/env bash
-# Refresh an installed PlutoniumBuild scaffold from a pinned source commit.
+# Refresh an installed PlutoniumBuild scaffold from a resolved source commit.
 # Managed files are replaced atomically, user-owned files are preserved, and a
 # failed smoke test restores the previous tree from build/temp/update/<stamp>.
 
 set -euo pipefail
 
 DEFAULT_SOURCE="https://github.com/Kiryuumaru/PlutoniumBuild.git"
+DEFAULT_REF="refs/heads/main"
 SOURCE=""
 SHA=""
+REQUESTED_REF="${PLUTONIUM_REF:-}"
 TARGET="$PWD"
 NO_SMOKE=0
 FORCE_SMOKE=0
 
 usage() {
     cat <<'EOF'
-usage: build/update.sh --sha <40-character-commit> [options]
+usage: build/update.sh [--ref <branch|tag|commit> | --sha <40-character-commit>] [options]
 
 options:
-  --sha <sha>       source commit to install (required)
+  --ref <ref>       source branch, tag, or full commit (default: main)
+  --sha <sha>       source commit to install (exactly 40 characters)
   --source <url>    source repository (default: the lock's source)
   --target <dir>    consumer repository (default: current directory)
   --no-smoke        skip the post-update smoke test
@@ -30,6 +33,11 @@ while [ "$#" -gt 0 ]; do
         --sha)
             [ "$#" -ge 2 ] || { echo "build/update.sh: --sha needs a value." >&2; exit 2; }
             SHA="$2"
+            shift 2
+            ;;
+        --ref)
+            [ "$#" -ge 2 ] || { echo "build/update.sh: --ref needs a value." >&2; exit 2; }
+            REQUESTED_REF="$2"
             shift 2
             ;;
         --source)
@@ -62,11 +70,55 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-if ! [[ "$SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
-    echo "build/update.sh: --sha must be a full 40-character commit SHA; resolve the target first (for example with git ls-remote)." >&2
+EXPLICIT_SOURCE="$SOURCE"
+
+if [ -n "$SHA" ] && [ -n "$REQUESTED_REF" ]; then
+    echo "build/update.sh: --sha and --ref are mutually exclusive." >&2
     exit 2
 fi
-SHA=$(printf '%s' "$SHA" | tr 'A-F' 'a-f')
+if [ -n "$SHA" ]; then
+    if ! [[ "$SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+        echo "build/update.sh: --sha must be a full 40-character commit SHA." >&2
+        exit 2
+    fi
+    SHA=$(printf '%s' "$SHA" | tr 'A-F' 'a-f')
+fi
+
+validate_ref() {
+    local value="$1"
+    [ -n "$value" ] || return 1
+    case "$value" in
+        -*) return 1 ;;
+        *[[:space:][:cntrl:]]*) return 1 ;;
+        *:*|*+*|*^*|*~*|*'?'*|*'*'*|*'['*|*\\*) return 1 ;;
+        *'@{'*) return 1 ;;
+        *'..'*) return 1 ;;
+        *.lock|*.lock/*) return 1 ;;
+        *.) return 1 ;;
+        */|/*) return 1 ;;
+        refs/pull/*) return 1 ;;
+        refs/heads/*|refs/tags/*) return 0 ;;
+        refs/*) return 1 ;;
+    esac
+    return 0
+}
+
+if [ -n "$REQUESTED_REF" ] && ! validate_ref "$REQUESTED_REF"; then
+    echo "build/update.sh: --ref must be a branch or tag name, a refs/heads/... branch, a refs/tags/... tag, or a full 40-character commit SHA." >&2
+    exit 2
+fi
+
+if [ -n "$REQUESTED_REF" ]; then
+    REF_LABEL="$REQUESTED_REF"
+elif [ -n "$SHA" ]; then
+    REF_LABEL="$SHA"
+else
+    REF_LABEL="$DEFAULT_REF (default)"
+fi
+
+case "$SOURCE" in
+    -*) echo "build/update.sh: --source must not start with '-'." >&2; exit 2 ;;
+esac
 
 [ -d "$TARGET" ] || { echo "build/update.sh: target directory not found: $TARGET" >&2; exit 1; }
 TARGET=$(cd "$TARGET" && pwd -P)
@@ -85,7 +137,6 @@ lock_get() {
         {
             line = $0
             sub(/\r$/, "", line)
-            sub(/^[[:space:]]+/, "", line)
             prefix = key "="
             if (index(line, prefix) == 1) {
                 value = substr(line, length(prefix) + 1)
@@ -96,6 +147,77 @@ lock_get() {
         }
     ' "$file"
 }
+
+is_reserved_lock_key() {
+    case "$1" in
+        format|source|source_url|scaffold_commit|package_version|sdk_version|\
+        installer_repo|installer_commit|installer_sh_sha256|installer_ps1_sha256|\
+        sdk_archives_sha256)
+            return 0
+            ;;
+        sdk_archive_*_sha512)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+validate_lock() {
+    local file="$1" prefix="$2"
+    local line trimmed key value seen=" "
+    while IFS= read -r line; do
+        line=${line%$'\r'}
+        case "$line" in
+            ''|'#'*) continue ;;
+        esac
+        trimmed=${line#"${line%%[![:space:]]*}"}
+        case "$trimmed" in
+            '#'*) continue ;;
+        esac
+        if [[ "$trimmed" =~ ^([A-Za-z0-9_-]+)= ]]; then
+            key=${BASH_REMATCH[1]}
+            if ! is_reserved_lock_key "$key"; then
+                continue
+            fi
+            if [ "$trimmed" != "$line" ]; then
+                echo "$prefix is invalid: reserved key $key must start at column 0." >&2
+                return 1
+            fi
+            case "$seen" in
+                *" $key "*)
+                    echo "$prefix is invalid: duplicate reserved key $key." >&2
+                    return 1
+                    ;;
+            esac
+            seen="$seen$key "
+            value=${trimmed#*=}
+            if [ "$key" = "scaffold_commit" ] && ! [[ "$value" =~ ^[0-9a-fA-F]{40}$ ]]; then
+                echo "$prefix is invalid: scaffold_commit must be a full 40-character commit SHA." >&2
+                return 1
+            fi
+            continue
+        fi
+        if [[ "$trimmed" =~ ^([A-Za-z0-9_-]+)[[:space:]]+= ]]; then
+            key=${BASH_REMATCH[1]}
+            if is_reserved_lock_key "$key"; then
+                echo "$prefix is invalid: reserved key $key has a non-canonical form; write $key=value at column 0." >&2
+                return 1
+            fi
+        fi
+    done < "$file"
+    for key in format source source_url scaffold_commit package_version; do
+        case "$seen" in
+            *" $key "*) ;;
+            *)
+                echo "$prefix is invalid: missing required key $key." >&2
+                return 1
+                ;;
+        esac
+    done
+    return 0
+}
+
+validate_lock "$LOCK_FILE" "build/update.sh: installed lock" || exit 1
 
 sha256_file() {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -185,6 +307,73 @@ validate_source_url() {
         *[[:space:][:cntrl:]]*) return 1 ;;
     esac
     return 0
+}
+
+resolve_ref_sha() {
+    local source="$1" requested="$2"
+    local ref="$requested" output line sha="" peeled="" name candidate
+    local branch_found=0 tag_found=0
+
+    if [ -z "$ref" ]; then
+        ref="$DEFAULT_REF"
+    fi
+
+    if [[ "$ref" =~ ^[0-9a-fA-F]{40}$ ]]; then
+        printf '%s\n' "$(printf '%s' "$ref" | tr 'A-F' 'a-f')"
+        return 0
+    fi
+
+    case "$ref" in
+        refs/heads/*|refs/tags/*) ;;
+        *)
+            if ! output=$(GIT_TERMINAL_PROMPT=0 git ls-remote -- "$source" \
+                "refs/heads/$ref" "refs/tags/$ref" "refs/tags/$ref^{}" 2>/dev/null); then
+                echo "build/update.sh: could not query $ref from $source." >&2
+                return 1
+            fi
+            while IFS=$'\t' read -r candidate name; do
+                if [ "$name" = "refs/heads/$ref" ]; then
+                    branch_found=1
+                fi
+                if [ "$name" = "refs/tags/$ref" ]; then
+                    tag_found=1
+                fi
+            done <<< "$output"
+            if [ "$branch_found" -eq 1 ] && [ "$tag_found" -eq 1 ]; then
+                echo "build/update.sh: ref $ref is ambiguous: refs/heads/$ref and refs/tags/$ref both exist; pass refs/heads/$ref or refs/tags/$ref." >&2
+                return 2
+            fi
+            if [ "$branch_found" -eq 1 ]; then
+                ref="refs/heads/$ref"
+            elif [ "$tag_found" -eq 1 ]; then
+                ref="refs/tags/$ref"
+            else
+                echo "build/update.sh: ref $ref was not found in $source." >&2
+                return 1
+            fi
+            ;;
+    esac
+
+    if ! output=$(GIT_TERMINAL_PROMPT=0 git ls-remote -- "$source" "$ref" "$ref^{}" 2>/dev/null); then
+        echo "build/update.sh: could not query $ref from $source." >&2
+        return 1
+    fi
+    while IFS=$'\t' read -r candidate name; do
+        if [ -n "$name" ] && [ "$name" = "$ref" ]; then
+            sha="$candidate"
+        fi
+        if [ -n "$name" ] && [ "$name" = "$ref^{}" ]; then
+            peeled="$candidate"
+        fi
+    done <<< "$output"
+    if [ -n "$peeled" ]; then
+        sha="$peeled"
+    fi
+    if [ -z "$sha" ]; then
+        echo "build/update.sh: ref $ref was not found in $source." >&2
+        return 1
+    fi
+    printf '%s\n' "$sha"
 }
 
 lock_has_path() {
@@ -370,11 +559,36 @@ if ! validate_source_url "$SOURCE"; then
     echo "build/update.sh: --source must not contain credentials (userinfo, query, or fragment)." >&2
     exit 2
 fi
+case "$SOURCE" in
+    -*) echo "build/update.sh: source must not start with '-'." >&2; exit 2 ;;
+esac
+
+LOCK_SOURCE="$CURRENT_SOURCE"
+LOCK_SOURCE_URL="$CURRENT_SOURCE_URL"
+if [ -n "$EXPLICIT_SOURCE" ]; then
+    LOCK_SOURCE="$SOURCE"
+    if [ "$SOURCE" = "$DEFAULT_SOURCE" ]; then
+        LOCK_SOURCE="github.com/Kiryuumaru/PlutoniumBuild"
+    fi
+    LOCK_SOURCE_URL="$SOURCE"
+fi
 
 command -v git >/dev/null 2>&1 || {
     echo "build/update.sh: git is required to fetch the scaffold source." >&2
     exit 1
 }
+
+if [ -z "$SHA" ]; then
+    resolved=""
+    if resolved=$(resolve_ref_sha "$SOURCE" "$REQUESTED_REF"); then
+        SHA="$resolved"
+    else
+        exit $?
+    fi
+fi
+echo "PlutoniumBuild: source $SOURCE"
+echo "PlutoniumBuild: ref $REF_LABEL"
+echo "PlutoniumBuild: commit $SHA"
 
 FETCH_DIR=$(mktemp -d "${TMPDIR:-/tmp}/plutonium-update.XXXXXXXX") || {
     echo "build/update.sh: could not create a temporary directory." >&2
@@ -394,7 +608,7 @@ git init -q "$FETCH_DIR"
 git -C "$FETCH_DIR" config core.autocrlf false
 git -C "$FETCH_DIR" config core.eol lf
 git -C "$FETCH_DIR" remote add origin "$SOURCE"
-if ! GIT_TERMINAL_PROMPT=0 git -C "$FETCH_DIR" fetch --depth 1 --no-tags origin "$SHA" >/dev/null 2>&1; then
+if ! GIT_TERMINAL_PROMPT=0 git -C "$FETCH_DIR" fetch --depth 1 --no-tags origin -- "$SHA" >/dev/null 2>&1; then
     echo "build/update.sh: could not fetch commit $SHA from $SOURCE." >&2
     exit 1
 fi
@@ -412,6 +626,7 @@ if [ ! -d "$SOURCE_BUILD" ] || [ ! -d "$SOURCE_ROOT" ] || [ ! -f "$SOURCE_LOCK" 
     echo "build/update.sh: commit $SHA does not contain the scaffold payload." >&2
     exit 1
 fi
+validate_lock "$SOURCE_LOCK" "build/update.sh: source lock" || exit 1
 if find "$FETCH_DIR/scaffold" -type l -print -quit | grep -q .; then
     echo "build/update.sh: scaffold payload contains a symbolic link; refusing to install it." >&2
     exit 1
@@ -564,15 +779,16 @@ done < "$SOURCE_LOCK"
 
 cp -p "$SOURCE_LOCK" "$STAGE/build/plutonium.lock"
 
-# Keep the consumer's source identity, move the commit to the requested one,
-# and make the lock describe the files that will actually be on disk. Any path
-# carrying both managed and preserve tags keeps the on-disk copy, so its hash
-# must describe that copy rather than the source copy.
+# Keep the consumer's source identity for a no-arg update and re-home it for an
+# explicit --source, move the commit to the requested one, and make the lock
+# describe the files that will actually be on disk. Any path carrying both
+# managed and preserve tags keeps the on-disk copy, so its hash must describe
+# that copy rather than the source copy.
 awk -v sha="$SHA" \
-    -v source="$CURRENT_SOURCE" \
-    -v source_url="$CURRENT_SOURCE_URL" '
+    -v source="$LOCK_SOURCE" \
+    -v source_url="$LOCK_SOURCE_URL" '
     /^source=/ { print "source=" source; next }
-    /^source_url=/ { if (source_url != "") print "source_url=" source_url; next }
+    /^source_url=/ { print "source_url=" source_url; next }
     /^scaffold_commit=/ { print "scaffold_commit=" sha; next }
     { print }
 ' "$SOURCE_LOCK" > "$STAGE/build/plutonium.lock.new"

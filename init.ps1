@@ -1,22 +1,33 @@
-# Bootstrap scaffold installer for Windows PowerShell 5.1. It fetches a pinned
-# source commit, verifies the managed-file manifest, refuses to overwrite an
+# Bootstrap scaffold installer for Windows PowerShell 5.1. It resolves a source
+# ref to a commit, verifies the managed-file manifest, refuses to overwrite an
 # existing scaffold, and installs the payload atomically.
 
 [CmdletBinding()]
 Param(
     [string]$Source = $(if ($env:PLUTONIUM_SOURCE) { $env:PLUTONIUM_SOURCE } else { "https://github.com/Kiryuumaru/PlutoniumBuild.git" }),
     [string]$Sha = $env:PLUTONIUM_SHA,
+    [string]$Ref = $env:PLUTONIUM_REF,
     [string]$Target = $(if ($env:PLUTONIUM_TARGET) { $env:PLUTONIUM_TARGET } else { (Get-Location).Path })
 )
 
 $ErrorActionPreference = "Stop"
 $ConfirmPreference = "None"
 $DefaultSource = "https://github.com/Kiryuumaru/PlutoniumBuild.git"
+$DefaultRef = "refs/heads/main"
 
 function Stop-Init {
     param([string]$Message)
     Write-Error $Message
     exit 1
+}
+
+function Stop-InitUsage {
+    param([string]$Message)
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    Write-Error $Message
+    $ErrorActionPreference = $previousErrorActionPreference
+    exit 2
 }
 
 function Invoke-NativeCommand {
@@ -36,6 +47,23 @@ function Invoke-NativeCommand {
     [pscustomobject]@{
         Output = @($output)
         ExitCode = $exitCode
+    }
+}
+
+function Invoke-GitQuery {
+    param([string[]]$Arguments)
+    $previousPrompt = $env:GIT_TERMINAL_PROMPT
+    $env:GIT_TERMINAL_PROMPT = "0"
+    try {
+        return Invoke-NativeCommand -FilePath git -Arguments $Arguments
+    }
+    finally {
+        if ($null -eq $previousPrompt) {
+            Remove-Item Env:GIT_TERMINAL_PROMPT -ErrorAction SilentlyContinue
+        }
+        else {
+            $env:GIT_TERMINAL_PROMPT = $previousPrompt
+        }
     }
 }
 
@@ -67,8 +95,109 @@ function Assert-SourceUrl {
         $Value.Contains("?") -or
         $Value.Contains("#") -or
         $Value -match "[\s\x00-\x1F]") {
-        Stop-Init "init.ps1: --Source must not contain credentials (userinfo, query, or fragment)."
+        Stop-InitUsage "init.ps1: --Source must not contain credentials (userinfo, query, or fragment)."
     }
+}
+
+function Test-RefValue {
+    param([string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return $false
+    }
+    if ($Value.StartsWith("-", [System.StringComparison]::Ordinal)) {
+        return $false
+    }
+    if ($Value -match "[\s\x00-\x1F]") {
+        return $false
+    }
+    if ($Value -match "[:+^~?*\[\\]") {
+        return $false
+    }
+    if ($Value.Contains("@{") -or $Value.Contains("..")) {
+        return $false
+    }
+    if ($Value.EndsWith(".", [System.StringComparison]::Ordinal)) {
+        return $false
+    }
+    if ($Value.EndsWith(".lock", [System.StringComparison]::Ordinal) -or $Value.Contains(".lock/")) {
+        return $false
+    }
+    if ($Value.StartsWith("/", [System.StringComparison]::Ordinal) -or
+        $Value.EndsWith("/", [System.StringComparison]::Ordinal)) {
+        return $false
+    }
+    if ($Value.StartsWith("refs/pull/", [System.StringComparison]::Ordinal)) {
+        return $false
+    }
+    if ($Value.StartsWith("refs/heads/", [System.StringComparison]::Ordinal) -or
+        $Value.StartsWith("refs/tags/", [System.StringComparison]::Ordinal)) {
+        return $true
+    }
+    if ($Value.StartsWith("refs/", [System.StringComparison]::Ordinal)) {
+        return $false
+    }
+    return $true
+}
+
+function Resolve-RefCommit {
+    param([string]$Source, [string]$Requested)
+    $ref = $Requested
+    if ([string]::IsNullOrWhiteSpace($ref)) {
+        $ref = $DefaultRef
+    }
+
+    if ($ref -match "^[0-9a-fA-F]{40}$") {
+        return $ref.ToLowerInvariant()
+    }
+
+    if (-not ($ref.StartsWith("refs/heads/", [System.StringComparison]::Ordinal) -or
+              $ref.StartsWith("refs/tags/", [System.StringComparison]::Ordinal))) {
+        $result = Invoke-GitQuery -Arguments @(
+            "ls-remote", "--", $Source, "refs/heads/$ref", "refs/tags/$ref", "refs/tags/$ref^{}")
+        if ($result.ExitCode -ne 0) {
+            Stop-Init "init.ps1: could not query $ref from $Source.`n$($result.Output -join [Environment]::NewLine)"
+        }
+        $branchFound = $false
+        $tagFound = $false
+        foreach ($line in $result.Output) {
+            $parts = ([string]$line) -split "`t"
+            if ($parts.Count -lt 2) { continue }
+            if ($parts[1] -ceq "refs/heads/$ref") { $branchFound = $true }
+            if ($parts[1] -ceq "refs/tags/$ref") { $tagFound = $true }
+        }
+        if ($branchFound -and $tagFound) {
+            Stop-InitUsage "init.ps1: ref $ref is ambiguous: refs/heads/$ref and refs/tags/$ref both exist; pass refs/heads/$ref or refs/tags/$ref."
+        }
+        if ($branchFound) {
+            $ref = "refs/heads/$ref"
+        }
+        elseif ($tagFound) {
+            $ref = "refs/tags/$ref"
+        }
+        else {
+            Stop-Init "init.ps1: ref $ref was not found in $Source."
+        }
+    }
+
+    $result = Invoke-GitQuery -Arguments @("ls-remote", "--", $Source, $ref, "$ref^{}")
+    if ($result.ExitCode -ne 0) {
+        Stop-Init "init.ps1: could not query $ref from $Source.`n$($result.Output -join [Environment]::NewLine)"
+    }
+    $sha = $null
+    $peeled = $null
+    foreach ($line in $result.Output) {
+        $parts = ([string]$line) -split "`t"
+        if ($parts.Count -lt 2) { continue }
+        if ($parts[1] -ceq $ref) { $sha = $parts[0] }
+        elseif ($parts[1] -ceq ($ref + "^{}")) { $peeled = $parts[0] }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($peeled)) {
+        $sha = $peeled
+    }
+    if ([string]::IsNullOrWhiteSpace($sha)) {
+        Stop-Init "init.ps1: ref $ref was not found in $Source."
+    }
+    return $sha.Trim()
 }
 
 function Get-InstalledSourcePath {
@@ -141,11 +270,68 @@ function Get-LockValue {
     foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
         $trimmed = $line.Trim()
         if ($trimmed.StartsWith("#", [System.StringComparison]::Ordinal)) { continue }
-        if ($trimmed.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
-            return $trimmed.Substring($prefix.Length).Trim()
+        if ($line.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+            return $line.Substring($prefix.Length).Trim()
         }
     }
     return $null
+}
+
+function Test-ReservedLockKey {
+    param([string]$Key)
+    switch -CaseSensitive ($Key) {
+        "format" { return $true }
+        "source" { return $true }
+        "source_url" { return $true }
+        "scaffold_commit" { return $true }
+        "package_version" { return $true }
+        "sdk_version" { return $true }
+        "installer_repo" { return $true }
+        "installer_commit" { return $true }
+        "installer_sh_sha256" { return $true }
+        "installer_ps1_sha256" { return $true }
+        "sdk_archives_sha256" { return $true }
+    }
+    if ($Key -clike "sdk_archive_*_sha512") { return $true }
+    return $false
+}
+
+function Assert-LockCanonical {
+    param([string]$Path, [string]$Label)
+    $seen = @{}
+    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+        if ([string]::IsNullOrEmpty($line)) { continue }
+        if ($line.StartsWith("#", [System.StringComparison]::Ordinal)) { continue }
+        $trimmed = $line.TrimStart()
+        if ($trimmed.StartsWith("#", [System.StringComparison]::Ordinal)) { continue }
+        if ($trimmed -match "^([A-Za-z0-9_-]+)=") {
+            $key = $Matches[1]
+            if (-not (Test-ReservedLockKey -Key $key)) { continue }
+            if ($trimmed.Length -ne $line.Length) {
+                Stop-Init "init.ps1: $Label is invalid: reserved key $key must start at column 0."
+            }
+            if ($seen.ContainsKey($key)) {
+                Stop-Init "init.ps1: $Label is invalid: duplicate reserved key $key."
+            }
+            $seen[$key] = $true
+            $value = $trimmed.Substring($key.Length + 1)
+            if ($key -ceq "scaffold_commit" -and $value -notmatch "^[0-9a-fA-F]{40}$") {
+                Stop-Init "init.ps1: $Label is invalid: scaffold_commit must be a full 40-character commit SHA."
+            }
+            continue
+        }
+        if ($trimmed -match "^([A-Za-z0-9_-]+)\s+=") {
+            $key = $Matches[1]
+            if (Test-ReservedLockKey -Key $key) {
+                Stop-Init "init.ps1: $Label is invalid: reserved key $key has a non-canonical form; write $key=value at column 0."
+            }
+        }
+    }
+    foreach ($key in @("format", "source", "source_url", "scaffold_commit", "package_version")) {
+        if (-not $seen.ContainsKey($key)) {
+            Stop-Init "init.ps1: $Label is invalid: missing required key $key."
+        }
+    }
 }
 
 function Test-LockHasPath {
@@ -240,12 +426,32 @@ function Assert-SourceContract {
     }
 }
 
+if ($Source.StartsWith("-", [System.StringComparison]::Ordinal)) {
+    Stop-InitUsage "init.ps1: --Source must not start with '-'."
+}
 Assert-SourceUrl -Value $Source
 
-if ($Sha -notmatch "^[0-9a-fA-F]{40}$") {
-    Stop-Init "init.ps1: --Sha must be the full 40-character source commit SHA."
+if (-not [string]::IsNullOrEmpty($Sha) -and -not [string]::IsNullOrEmpty($Ref)) {
+    Stop-InitUsage "init.ps1: --Sha and --Ref are mutually exclusive."
 }
-$Sha = $Sha.ToLowerInvariant()
+if (-not [string]::IsNullOrEmpty($Sha)) {
+    if ($Sha -notmatch "^[0-9a-fA-F]{40}$") {
+        Stop-InitUsage "init.ps1: --Sha must be the full 40-character source commit SHA."
+    }
+    $Sha = $Sha.ToLowerInvariant()
+}
+if (-not [string]::IsNullOrEmpty($Ref) -and -not (Test-RefValue -Value $Ref)) {
+    Stop-InitUsage "init.ps1: --Ref must be a branch or tag name, a refs/heads/... branch, a refs/tags/... tag, or a full 40-character commit SHA."
+}
+if (-not [string]::IsNullOrEmpty($Ref)) {
+    $refLabel = $Ref
+}
+elseif (-not [string]::IsNullOrEmpty($Sha)) {
+    $refLabel = $Sha
+}
+else {
+    $refLabel = $DefaultRef + " (default)"
+}
 
 if (-not (Test-Path -LiteralPath $Target -PathType Container)) {
     Stop-Init "init.ps1: target directory not found: $Target"
@@ -267,6 +473,13 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Stop-Init "init.ps1: git is required to fetch the scaffold source."
 }
 
+if ([string]::IsNullOrEmpty($Sha)) {
+    $Sha = Resolve-RefCommit -Source $Source -Requested $Ref
+}
+Write-Host "PlutoniumBuild: source $Source"
+Write-Host "PlutoniumBuild: ref $refLabel"
+Write-Host "PlutoniumBuild: commit $Sha"
+
 $fetchDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("plutonium-init-" + [guid]::NewGuid().ToString("N"))
 $stage = $null
 New-Item -ItemType Directory -Path $fetchDirectory -Force | Out-Null
@@ -283,7 +496,7 @@ try {
     if ($result.ExitCode -ne 0) { Stop-Init "init.ps1: git remote add failed." }
 
     $env:GIT_TERMINAL_PROMPT = "0"
-    $result = Invoke-NativeCommand -FilePath git -Arguments @("-C", $fetchDirectory, "fetch", "--depth", "1", "--no-tags", "origin", $Sha)
+    $result = Invoke-NativeCommand -FilePath git -Arguments @("-C", $fetchDirectory, "fetch", "--depth", "1", "--no-tags", "origin", "--", $Sha)
     if ($result.ExitCode -ne 0) {
         Stop-Init "init.ps1: could not fetch commit $Sha from $Source.`n$($result.Output -join [Environment]::NewLine)"
     }
@@ -306,6 +519,7 @@ try {
         -not (Test-Path -LiteralPath $sourceLock -PathType Leaf)) {
         Stop-Init "init.ps1: commit $Sha does not contain the scaffold payload."
     }
+    Assert-LockCanonical -Path $sourceLock -Label "source lock"
 
     foreach ($item in Get-ChildItem -LiteralPath (Join-Path $fetchDirectory "scaffold") -Recurse -Force) {
         if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {

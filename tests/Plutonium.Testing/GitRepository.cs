@@ -24,19 +24,24 @@ public sealed class GitRepository
     /// <summary>Gets the current commit SHA.</summary>
     public string HeadSha => RunRequired("rev-parse", "HEAD").StandardOutput.Trim();
 
-    /// <summary>Creates and initializes a repository with a <c>main</c> branch.</summary>
+    /// <summary>Creates and initializes a repository with the requested default branch.</summary>
     /// <param name="workspace">The workspace that owns the repository.</param>
     /// <param name="name">A short name for the repository directory.</param>
+    /// <param name="defaultBranch">The branch the initial <c>HEAD</c> points at.</param>
     /// <returns>The initialized repository.</returns>
-    public static GitRepository Create(TempWorkspace workspace, string name)
+    public static GitRepository Create(
+        TempWorkspace workspace,
+        string name,
+        string defaultBranch = "main")
     {
         ArgumentNullException.ThrowIfNull(workspace);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(defaultBranch);
 
         var rootPath = workspace.PathFor("repos", name);
         Directory.CreateDirectory(rootPath);
         var repository = new GitRepository(rootPath);
-        repository.RunRequired("init", "-b", "main");
+        repository.RunRequired("init", "-b", defaultBranch);
         repository.RunRequired("config", "user.name", AuthorName);
         repository.RunRequired("config", "user.email", AuthorEmail);
         return repository;
@@ -85,6 +90,57 @@ public sealed class GitRepository
             "-m",
             message);
         return HeadSha;
+    }
+
+    /// <summary>Creates and checks out a branch at <c>HEAD</c>.</summary>
+    /// <param name="name">The branch name.</param>
+    public void CreateBranch(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        RunRequired("checkout", "-q", "-b", name);
+    }
+
+    /// <summary>Creates a lightweight tag at <c>HEAD</c>.</summary>
+    /// <param name="name">The tag name.</param>
+    /// <returns>The tagged commit SHA.</returns>
+    public string CreateLightweightTag(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        RunRequired("tag", name);
+        return ResolveCommit("refs/tags/" + name);
+    }
+
+    /// <summary>Creates an annotated tag at <c>HEAD</c>.</summary>
+    /// <param name="name">The tag name.</param>
+    /// <param name="message">The tag message.</param>
+    /// <returns>The tagged commit SHA.</returns>
+    public string CreateAnnotatedTag(string name, string message)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+
+        RunRequired("-c", "tag.gpgsign=false", "tag", "-a", name, "-m", message);
+        return ResolveCommit("refs/tags/" + name);
+    }
+
+    /// <summary>Resolves the object a ref points at without peeling annotated tags.</summary>
+    /// <param name="refName">The ref to resolve.</param>
+    /// <returns>The object SHA.</returns>
+    public string ResolveObject(string refName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(refName);
+        return RunRequired("rev-parse", refName).StandardOutput.Trim();
+    }
+
+    /// <summary>Resolves the commit a ref ultimately points at, peeling annotated tags.</summary>
+    /// <param name="refName">The ref to resolve.</param>
+    /// <returns>The commit SHA.</returns>
+    public string ResolveCommit(string refName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(refName);
+        return RunRequired("rev-parse", refName + "^{commit}").StandardOutput.Trim();
     }
 
     /// <summary>Runs a git command and returns its captured result.</summary>

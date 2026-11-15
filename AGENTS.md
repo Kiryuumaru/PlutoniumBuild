@@ -4,8 +4,8 @@
 > `src/Plutonium.Helpers`, `src/Plutonium.Shell`, and the single
 > `PlutoniumBuild` package exist with landed code; `tests/` landed;
 > `scaffold/`, `init.sh`, and `init.ps1` landed; `samples/` remains
-> **planned**. The repository is private and the 0.1.0 distribution is not
-> published; nuget.org publishing is release-gated. Versioning behavior is
+> **planned**. The repository is public and 0.1.0 is published on nuget.org;
+> nuget.org publishing is manual and confirm-gated. Versioning behavior is
 > landed and tested: tag and `versions.json` modes, outcome stamping,
 > run-result gating, and `StatusWatch`. Workflow security and scaffold
 > hardening are landed and tested: GitHub read-only defaults and job-scoped
@@ -32,7 +32,7 @@ and state it.
 ├── build.sh                # maintainer runner: bootstrap SDK, build + test (bash)
 ├── build.ps1               # maintainer runner: same, in Windows PowerShell
 ├── build.cmd               # maintainer runner: Windows CMD wrapper for build.ps1
-├── init.sh                 # consumer scaffold installer (bash, pinned commit SHA)
+├── init.sh                 # consumer scaffold installer (bash, default branch, optional --ref/--sha)
 ├── init.ps1                # consumer scaffold installer (Windows PowerShell 5.1)
 ├── .gitattributes          # LF guards for *.sh / *.cmd
 ├── LICENSE                 # MIT
@@ -104,12 +104,13 @@ and state it.
   -c Release -o artifacts` — build the single `PlutoniumBuild` package.
   `dotnet pack` on the solution must still produce one distributable package.
 - `bash scaffold/lock.sh verify` — verify the scaffold manifest hashes,
-  lock completeness, package-version invariant, and SDK pin. Use `write`
-  after changing scaffold files.
+  lock completeness, canonical and unique reserved keys, package-version
+  invariant, and SDK pin. Use `write` after changing scaffold files.
 - `bash scaffold/smoke/source-credentials.sh`,
   `bash scaffold/smoke/lock-contract.sh`,
-  `bash scaffold/smoke/preserve-drift.sh`, and
-  `bash scaffold/smoke/update-rollback.sh` — scaffold safety smokes.
+  `bash scaffold/smoke/preserve-drift.sh`,
+  `bash scaffold/smoke/update-rollback.sh`, and
+  `bash scaffold/smoke/ref-resolution.sh` — scaffold safety smokes.
   `pwsh scaffold/smoke/powershell-smoke.ps1` exercises the PowerShell
   installer, updater, and build flow; CI runs it on Ubuntu with `-SkipBuild`
   and runs the full flow on Windows.
@@ -120,7 +121,7 @@ and state it.
   (about one hour) API key minted by NuGet Trusted Publishing through GitHub
   OIDC (`NuGet/login`); the OIDC token is single-use and no NuGet secret is
   stored. It needs no public repository and no deployment environment.
-  Release-gated; never run it as part of docs work.
+  Manual and confirm-gated; never run it as part of docs work.
 
 Docs tooling: none yet. Record verification as `Not run (docs-only)` unless
 project docs tooling is added.
@@ -143,12 +144,14 @@ Applies to landed code; state as gate, not current status:
   environment only on pre/post setup, entry secret scoping and unknown-id
   failure, entry checkout without persisted credentials, SHA-pinned actions,
   and workflow-name/path containment.
-- Scaffold tests assert init refusal, symlink/root-wrapper refusal, pinned SHA,
-  preserved user files, package-pin bumps, update idempotence, and the sample
-  Test/Build/Publish flow.
+- Scaffold tests assert init refusal, symlink/root-wrapper refusal, plain-name
+  and fully qualified ref resolution with ambiguity refusal, lock canonicality
+  and source identity, preserved user files, package-pin bumps, update
+  idempotence, and the sample Test/Build/Publish flow.
 - Scaffold smoke scripts assert credential-bearing source rejection, lock
-  completeness, preserve drift, update rollback of newly added files, and the
-  PowerShell init/update/build flow on Linux (skip build) and Windows.
+  completeness, preserve drift, update rollback of newly added files, ref
+  resolution and ambiguity refusal, and the PowerShell init/update/build flow
+  on Linux (skip build) and Windows.
 - Versioning tests assert `versions.json` generation/verification and Bump
   refusal, Bump HEAD/tag/trigger pushes, success and failure stamps, run-result
   failure gating, and watch cancellation/failure.
