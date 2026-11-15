@@ -501,15 +501,22 @@ public sealed class InitSafetyTests
         var source = await ScaffoldSource.CreateAsync(workspace, layout);
         var target = ScaffoldTestContext.CreateConsumerRepository(workspace);
 
-        foreach (var value in MalformedRefs)
+        for (var index = 0; index < MalformedRefs.Length; index++)
         {
+            var value = MalformedRefs[index];
             var result = await ScaffoldTestContext.RunInitAsync(source, target, refName: value);
-            ScaffoldTestContext.AssertFailed(result, "init with malformed ref '" + value + "'");
-            Assert.Equal(2, result.ExitCode);
+            ScaffoldTestContext.AssertFailed(
+                result,
+                "init with malformed ref '" + value + "' at matrix index " + index);
+            Assert.True(
+                result.ExitCode == 2,
+                "init with malformed ref '" + value + "' at matrix index " + index +
+                " exited with code " + result.ExitCode + " instead of 2." +
+                Environment.NewLine + result.Describe());
             Assert.Contains("--ref must be", CombinedOutput(result), StringComparison.Ordinal);
             Assert.False(
                 File.Exists(Path.Combine(target.RootPath, "build", "build.slnx")),
-                "Init installed a scaffold for malformed ref '" + value + "'.");
+                "Init installed a scaffold for malformed ref '" + value + "' at matrix index " + index + ".");
         }
     }
 

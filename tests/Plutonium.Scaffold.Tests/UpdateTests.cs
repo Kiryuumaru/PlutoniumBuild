@@ -753,11 +753,18 @@ public sealed class UpdateTests
         var originalCommit = ScaffoldTestContext.ReadScaffoldCommit(target);
         var originalHash = Hashing.Sha256File(lockPath);
 
-        foreach (var value in MalformedRefs)
+        for (var index = 0; index < MalformedRefs.Length; index++)
         {
+            var value = MalformedRefs[index];
             var result = await ScaffoldTestContext.RunUpdateAsync(target, source, refName: value);
-            ScaffoldTestContext.AssertFailed(result, "update with malformed ref '" + value + "'");
-            Assert.Equal(2, result.ExitCode);
+            ScaffoldTestContext.AssertFailed(
+                result,
+                "update with malformed ref '" + value + "' at matrix index " + index);
+            Assert.True(
+                result.ExitCode == 2,
+                "update with malformed ref '" + value + "' at matrix index " + index +
+                " exited with code " + result.ExitCode + " instead of 2." +
+                Environment.NewLine + result.Describe());
             Assert.Contains(
                 "--ref must be",
                 result.StandardOutput + Environment.NewLine + result.StandardError,
