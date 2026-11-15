@@ -179,6 +179,11 @@ public static class ProcessHarness
     /// bash.
     /// </param>
     /// <returns>The captured result.</returns>
+    /// <remarks>
+    /// On Windows, the child environment carries <c>MSYS=noglob</c> so the
+    /// MSYS2 runtime does not glob command-line arguments before the script
+    /// starts.
+    /// </remarks>
     public static Task<ProcessResult> RunBashAsync(
         string scriptPath,
         IReadOnlyList<string> arguments,
@@ -247,9 +252,10 @@ public static class ProcessHarness
 
     /// <summary>
     /// Adds the Git for Windows tool directories to the child's <c>PATH</c> on
-    /// Windows. The <c>bin\bash.exe</c> compat wrapper used to prepend these
-    /// directories itself; the real <c>usr\bin\bash.exe</c> does not, so the
-    /// harness supplies them explicitly. A caller-supplied <c>PATH</c> keeps its
+    /// Windows, and disables MSYS2 command-line globbing. The
+    /// <c>bin\bash.exe</c> compat wrapper used to prepend these directories
+    /// itself; the real <c>usr\bin\bash.exe</c> does not, so the harness
+    /// supplies them explicitly. A caller-supplied <c>PATH</c> keeps its
     /// entries first so a shim directory stays ahead of them; an inherited host
     /// <c>PATH</c> gets the tool directories first so Git's POSIX tools win over
     /// the same-named Windows system tools (<c>find.exe</c>, <c>sort.exe</c>).
@@ -267,15 +273,53 @@ public static class ProcessHarness
         }
 
         var toolDirectories = BashToolDirectories(executable);
-        if (toolDirectories.Count == 0)
+        var prepared = toolDirectories.Count == 0
+            ? environment
+            : PrepareBashEnvironmentCore(
+                toolDirectories,
+                environment,
+                Environment.GetEnvironmentVariable("PATH"));
+
+        return MergeMsysNoGlob(prepared, Environment.GetEnvironmentVariable("MSYS"));
+    }
+
+    /// <summary>
+    /// Merges <c>noglob</c> into the child's <c>MSYS</c> options. The MSYS2
+    /// runtime globs command-line arguments when a native parent starts an
+    /// MSYS program; a brace in a ref such as <c>refs/heads/ma@{in</c> would be
+    /// rewritten before bash sees it. <c>noglob</c> disables that expansion.
+    /// An existing option string is preserved and extended rather than
+    /// replaced, and options are separated by spaces as the runtime expects.
+    /// </summary>
+    /// <param name="environment">The prepared environment, or null.</param>
+    /// <param name="inheritedMsys">The host <c>MSYS</c> value used when the caller supplies none.</param>
+    /// <returns>The environment with <c>MSYS=noglob</c> merged in.</returns>
+    internal static IReadOnlyDictionary<string, string?> MergeMsysNoGlob(
+        IReadOnlyDictionary<string, string?>? environment,
+        string? inheritedMsys)
+    {
+        var existing = inheritedMsys;
+        if (environment is not null)
         {
-            return environment;
+            foreach (var pair in environment)
+            {
+                if (string.Equals(pair.Key, "MSYS", StringComparison.OrdinalIgnoreCase))
+                {
+                    existing = pair.Value;
+                    break;
+                }
+            }
         }
 
-        return PrepareBashEnvironmentCore(
-            toolDirectories,
-            environment,
-            Environment.GetEnvironmentVariable("PATH"));
+        var options = string.IsNullOrWhiteSpace(existing)
+            ? "noglob"
+            : existing.TrimEnd() + " noglob";
+
+        var merged = environment is null
+            ? new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, string?>(environment, StringComparer.OrdinalIgnoreCase);
+        merged["MSYS"] = options;
+        return merged;
     }
 
     /// <summary>

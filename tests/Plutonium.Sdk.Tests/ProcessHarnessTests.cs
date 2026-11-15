@@ -26,11 +26,15 @@ public sealed class ProcessHarnessTests
     }
 
     /// <summary>
-    /// A backslash ref reaches the script unchanged through the real shell, so
-    /// the malformed-ref grammar is not rewritten into a valid ref on Windows.
+    /// A literal argument with path or glob punctuation reaches the script
+    /// unchanged through the real shell, so the malformed-ref grammar is not
+    /// rewritten into a valid ref on Windows.
     /// </summary>
-    [Fact]
-    public async Task LiteralArguments_ReachTheScriptUnchanged()
+    /// <param name="literal">The literal argument value under test.</param>
+    [Theory]
+    [InlineData(@"refs/heads/ma\in")]
+    [InlineData("refs/heads/ma@{in")]
+    public async Task LiteralArguments_ReachTheScriptUnchanged(string literal)
     {
         using var workspace = TempWorkspace.Create("sdk-literal-arguments");
         var probe = Path.Combine(workspace.Root, "echo-argument.sh");
@@ -43,7 +47,6 @@ public sealed class ProcessHarnessTests
             """.Replace("\r\n", "\n", StringComparison.Ordinal));
         Assert.DoesNotContain("\r", await File.ReadAllTextAsync(probe), StringComparison.Ordinal);
 
-        var literal = @"refs/heads/ma\in";
         var result = await ProcessHarness.RunBashAsync(
             probe,
             [literal],
@@ -51,5 +54,43 @@ public sealed class ProcessHarnessTests
 
         Assert.True(result.Succeeded, result.Describe());
         Assert.Equal(literal, result.StandardOutput);
+    }
+
+    /// <summary>An existing MSYS option string is preserved and extended with noglob.</summary>
+    [Fact]
+    public void MsysNoGlob_PreservesExistingOptions()
+    {
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["MSYS"] = "winsymlinks:nativestrict",
+        };
+
+        var merged = ProcessHarness.MergeMsysNoGlob(environment, inheritedMsys: "glob:ignorecase");
+
+        Assert.Equal("winsymlinks:nativestrict noglob", merged["MSYS"]);
+        Assert.Equal("winsymlinks:nativestrict", environment["MSYS"]);
+    }
+
+    /// <summary>An inherited MSYS option string is used when the caller supplies none.</summary>
+    [Fact]
+    public void MsysNoGlob_UsesInheritedOptionsWhenTheCallerSuppliesNone()
+    {
+        var merged = ProcessHarness.MergeMsysNoGlob(environment: null, inheritedMsys: "glob:ignorecase");
+
+        Assert.Equal("glob:ignorecase noglob", merged["MSYS"]);
+    }
+
+    /// <summary>A caller-removed MSYS value does not resurrect the inherited options.</summary>
+    [Fact]
+    public void MsysNoGlob_ReplacesARemovedValue()
+    {
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["MSYS"] = null,
+        };
+
+        var merged = ProcessHarness.MergeMsysNoGlob(environment, inheritedMsys: "glob:ignorecase");
+
+        Assert.Equal("noglob", merged["MSYS"]);
     }
 }
